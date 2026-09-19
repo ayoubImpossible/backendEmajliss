@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 /**
  * Espaces : membres, modules activés, pages personnalisées.
@@ -36,32 +36,33 @@ exports.members = async (req, res, next) => {
   }
 };
 
-// ── GET /api/spaces/user-image/:userId ───────────────────────────────────────
-// Proxifie l'image de profil HumHub (requiert auth — HumHub retourne 401 sans token).
-// Retourne l'image directement (pas JSON) pour usage dans <Image source={uri}>.
-exports.userImage = async (req, res, next) => {
+// ── GET /api/spaces/user-image/:userId ─────────────────────────────────────
+exports.userImage = async (req, res) => {
   const { userId } = req.params;
   if (!userId || !/^\d+$/.test(userId)) return res.status(400).end();
+  const { BASE, httpsAgent } = require('../services/humhub');
+  const axios = require('axios');
+  const authHeader = { Authorization: `Bearer ${req.humhubToken}` };
+  // Step 1: fetch user profile to get real image_url from HumHub
   try {
-    const { BASE } = require('../services/humhub');
-    const axios = require('axios');
-    const { httpsAgent, asUser } = require('../services/humhub');
-    const imageUrl = `${BASE}/index.php?r=user%2Fprofile-image%2Fimage&userId=${userId}`;
-    const response = await axios.get(imageUrl, {
-      ...asUser(req.humhubToken),
-      responseType: 'stream',
-      timeout: 8000,
-      httpsAgent,
-      maxRedirects: 3,
-      validateStatus: (s) => s < 400,
+    const { data } = await axios.get(`${BASE}/api/v1/user/${userId}`, {
+      headers: authHeader, timeout: 6000, httpsAgent,
     });
-    res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    response.data.pipe(res);
-  } catch (err) {
-    // Return 204 (no content) so the app falls back to initials gracefully
-    res.status(204).end();
-  }
+    const imgUrl = data?.profile?.image_url || data?.image_url;
+    if (imgUrl) {
+      const r = await axios.get(imgUrl, {
+        headers: authHeader, responseType: 'stream',
+        timeout: 6000, httpsAgent, maxRedirects: 3,
+        validateStatus: (s) => s === 200,
+      });
+      if ((r.headers['content-type'] || '').startsWith('image/')) {
+        res.setHeader('Content-Type', r.headers['content-type']);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return r.data.pipe(res);
+      }
+    }
+  } catch (_) {}
+  return res.status(204).end();
 };
 
 /**
