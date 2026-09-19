@@ -52,7 +52,13 @@ exports.getFeed = async (req, res, next) => {
     // CRITICAL: HumHub ignores the `limit` param for some content types
     // (MajlissPost, ImportArticle) and returns ALL items (365, 401...).
     // We must slice BEFORE enriching, otherwise we enrich hundreds of items.
-    const rawResults = (data.results || []).slice(0, limit);
+    // Also filter out folder types — they are not meaningful in the feed.
+    const HIDDEN_TYPES = ['driveManager\\models\\DriveFolder', 'cfiles\\models\\Folder'];
+    const filtered = (data.results || []).filter((r) => {
+      const model = r?.metadata?.object_model || '';
+      return !HIDDEN_TYPES.some((t) => model.includes(t));
+    });
+    const rawResults = filtered.slice(0, limit);
     
     const results = await enrichItems(rawResults, token);
     

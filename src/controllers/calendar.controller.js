@@ -74,3 +74,33 @@ exports.show = async (req, res, next) => {
 exports.create  = (req, res) => res.status(501).json({ error: 'Non implémenté' });
 exports.update  = (req, res) => res.status(501).json({ error: 'Non implémenté' });
 exports.destroy = (req, res) => res.status(501).json({ error: 'Non implémenté' });
+
+/**
+ * RSVP — répondre à un événement.
+ * POST /api/calendar/:id/respond  { state: 1|2|3 }
+ *   1 = Accepté (présentiel ou teams selon le champ `mode`)
+ *   2 = Décliné
+ *   3 = Peut-être
+ * Proxifie POST /calendar/entry/:id/respond vers HumHub.
+ */
+exports.respond = async (req, res, next) => {
+  const { id } = req.params;
+  const { state, mode } = req.body; // mode: 'presentiel' | 'teams' (info only, stored in comment)
+
+  if (![1, 2, 3].includes(Number(state))) {
+    return res.status(400).json({ error: 'state doit être 1 (accepté), 2 (décliné) ou 3 (peut-être).' });
+  }
+
+  try {
+    const { data } = await http.post(
+      `/calendar/entry/${id}/respond`,
+      { state: Number(state) },
+      { ...asUser(req.humhubToken), timeout: 10000 },
+    );
+    res.json({ success: true, state: Number(state), mode: mode || null, data });
+  } catch (err) {
+    if (err.response?.status === 404) return res.status(404).json({ error: 'Événement introuvable.' });
+    if (err.response?.status === 403) return res.status(403).json({ error: 'Accès refusé.' });
+    next(err);
+  }
+};
