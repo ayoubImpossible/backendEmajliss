@@ -36,7 +36,33 @@ exports.members = async (req, res, next) => {
   }
 };
 
-// ── Pages personnalisées et raccourcis ────────────────────────────────────────
+// ── GET /api/spaces/user-image/:userId ───────────────────────────────────────
+// Proxifie l'image de profil HumHub (requiert auth — HumHub retourne 401 sans token).
+// Retourne l'image directement (pas JSON) pour usage dans <Image source={uri}>.
+exports.userImage = async (req, res, next) => {
+  const { userId } = req.params;
+  if (!userId || !/^\d+$/.test(userId)) return res.status(400).end();
+  try {
+    const { BASE } = require('../services/humhub');
+    const axios = require('axios');
+    const { httpsAgent, asUser } = require('../services/humhub');
+    const imageUrl = `${BASE}/index.php?r=user%2Fprofile-image%2Fimage&userId=${userId}`;
+    const response = await axios.get(imageUrl, {
+      ...asUser(req.humhubToken),
+      responseType: 'stream',
+      timeout: 8000,
+      httpsAgent,
+      maxRedirects: 3,
+      validateStatus: (s) => s < 400,
+    });
+    res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    response.data.pipe(res);
+  } catch (err) {
+    // Return 204 (no content) so the app falls back to initials gracefully
+    res.status(204).end();
+  }
+};
 
 /**
  * La plupart des « pages » du menu d'un espace ne sont pas des pages : ce sont

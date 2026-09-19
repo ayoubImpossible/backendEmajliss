@@ -337,9 +337,12 @@ function baseItem(raw) {
     createdAt:   meta.created_at || null,
     updatedAt:   meta.updated_at || null,
     author: meta.created_by ? {
-      id:   meta.created_by.id,
-      name: meta.created_by.display_name || '',
-      url:  meta.created_by.url          || '',
+      id:       meta.created_by.id,
+      name:     meta.created_by.display_name || '',
+      url:      meta.created_by.url          || '',
+      imageUrl: meta.created_by.profile?.image_url
+             || meta.created_by.image_url
+             || null,
     } : null,
     containerId:        meta.contentcontainer_id ?? null,
     pinned:             !!meta.pinned,
