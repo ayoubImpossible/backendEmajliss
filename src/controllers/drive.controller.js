@@ -201,3 +201,57 @@ exports.downloadCfile = async (req, res, next) => {
   });
   upstream.data.pipe(res);
 };
+
+// GET /api/drive/file/:id/thumbnail
+// Generates a real PNG capture of the first page using Chromium + Google Docs Viewer.
+// Works on Vercel (via @sparticuz/chromium) and Railway/VPS.
+exports.thumbnail = async (req, res, next) => {
+  const { id } = req.params;
+  const { BASE, httpsAgent } = require('../services/humhub');
+  const axios = require('axios');
+  const { generateThumbnail } = require('../services/thumbnail');
+
+  try {
+    // Step 1: Get the real download URL of the file from HumHub
+    const { data } = await http.get(`/emajlis/drive/file/${id}`, {
+      ...asUser(req.humhubToken),
+      timeout: 8000,
+    });
+
+    const file = data?.file || data;
+    if (!file) return res.status(404).json({ error: 'Fichier introuvable.' });
+
+    const mimeType = file.mime_type || file.mimeType || '';
+    const ext = (file.filename || file.file_name || '').split('.').pop().toLowerCase();
+
+    // Only generate thumbnails for supported types
+    const supported = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'odt', 'odp', 'ods'];
+    if (!supported.includes(ext)) {
+      return res.status(415).json({ error: 'Type non supporté pour la prévisualisation.' });
+    }
+
+    // Step 2: Build the authenticated download URL
+    // We need to construct an absolute URL that Google Docs Viewer can access.
+    // Since our files are behind auth, we proxy through our own endpoint with a token.
+    const downloadUrl = `${BASE}/api/v1/emajlis/drive/file/${id}/download`;
+    const cacheKey = `thumb:drive:${id}`;
+
+    // Step 3: Generate thumbnail
+    const png = await generateThumbnail(downloadUrl, cacheKey);
+
+    if (!png) {
+      // Fallback: return 204 so app shows placeholder
+      return res.status(204).end();
+    }
+
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(png);
+
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 404) return res.status(404).json({ error: 'Fichier introuvable.' });
+    if (status === 403) return res.status(403).json({ error: 'Accès refusé.' });
+    next(err);
+  }
+};

@@ -11,6 +11,7 @@ router.post('/container/:containerId/folder', requireAuth, ctrl.createFolder);
 router.get('/container/:containerId', requireAuth, ctrl.browse);
 router.get('/folder/:id', requireAuth, ctrl.folder);
 router.get('/file/:id/download', requireAuth, ctrl.download);
+router.get('/file/:id/thumbnail', requireAuth, ctrl.thumbnail);
 router.get('/file/:id', requireAuth, ctrl.file);
 
 module.exports = router;

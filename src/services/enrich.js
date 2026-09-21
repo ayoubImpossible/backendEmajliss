@@ -215,12 +215,13 @@ async function fetchPreview(type, objectId, token) {
         excerpt: toPlainText(f.description) || f.human_size || '',
         imageUrl: null,
         extra: {
-          filename:     f.filename,
-          mimeType:     f.mime_type,
-          size:         f.size,
-          humanSize:    f.human_size || humanSize(f.size),
-          folderId:     f.folder_id,
-          downloadPath: `/api/drive/file/${objectId}/download`,
+          filename:      f.filename,
+          mimeType:      f.mime_type,
+          size:          f.size,
+          humanSize:     f.human_size || humanSize(f.size),
+          folderId:      f.folder_id,
+          downloadPath:  `/api/drive/file/${objectId}/download`,
+          thumbnailPath: `/api/drive/file/${objectId}/thumbnail`,
         },
       };
     }
