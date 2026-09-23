@@ -36,8 +36,9 @@ const inflightEnrich = new Map();
 // ── WordPress source for ImportArticle / MajlissPost ─────────────────────────
 const WP_BASE = (process.env.WP_BASE_URL || 'https://intranet.csefrs.ma').replace(/\/+$/, '');
 const WP_API  = `${WP_BASE}/wp-json/wp/v2`;
-const wpCache = new TtlCache(30 * 60 * 1000, 1000); // 30 min — WP articles rarely change
+const wpCache = new TtlCache(5 * 60 * 1000, 1000); // 5 min
 
+// Fetch WP posts by date window
 async function fetchWpPostsByDate(isoDate) {
   if (!isoDate) return [];
   const day = isoDate.slice(0, 10);
@@ -55,16 +56,25 @@ async function fetchWpPostsByDate(isoDate) {
   });
 }
 
-async function fetchArticleFromWp(createdAt, humhubId) {
-  if (!createdAt) return null;
-  const posts = await fetchWpPostsByDate(createdAt);
-  if (!posts.length) return null;
-  const index = humhubId ? (Number(humhubId) % posts.length) : 0;
-  const p = posts[index] || posts[0];
+// Fetch N most recent WP posts — used when date matching fails
+async function fetchWpRecentPosts(perPage = 20) {
+  const key = `wp:recent:${perPage}`;
+  return wpCache.getOrSet(key, async () => {
+    try {
+      const { data } = await axios.get(`${WP_API}/posts`, {
+        params: { per_page: perPage, _embed: 'wp:featuredmedia', orderby: 'date', order: 'desc' },
+        timeout: 8000,
+      });
+      return Array.isArray(data) ? data : [];
+    } catch (_) { return []; }
+  });
+}
+
+function wpPostToPreview(p, humhubId) {
   const media = p._embedded?.['wp:featuredmedia']?.[0];
   return {
     title: (p.title?.rendered || '')
-      .replace(/&#8211;/g, '\u2013').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').trim()
+      .replace(/&#8211;/g, '\u2013').replace(/&amp;/g, '&').replace(/&#\d+;/g, '').replace(/<[^>]+>/g, '').trim()
       || 'Article du Journal',
     excerpt: (p.excerpt?.rendered || '').replace(/<[^>]+>/g, '').trim().slice(0, 220),
     imageUrl: media?.source_url || null,
@@ -72,6 +82,42 @@ async function fetchArticleFromWp(createdAt, humhubId) {
     wpId: p.id,
     extra: { wpId: p.id, wpUrl: p.link, humhubId },
   };
+}
+
+async function fetchArticleFromWp(createdAt, objectId) {
+  // Strategy 1: match by date (fast, works when WP publish date = HumHub import date)
+  if (createdAt) {
+    const posts = await fetchWpPostsByDate(createdAt);
+    if (posts.length) {
+      // Use objectId modulo to pick a consistent post when multiple exist same day
+      const idx = objectId ? (Number(objectId) % posts.length) : 0;
+      return wpPostToPreview(posts[idx] || posts[0], objectId);
+    }
+  }
+
+  // Strategy 2: fetch recent 20 WP posts, pick the one whose WP publish order
+  // matches the HumHub objectId order (both are created in the same sequence)
+  const recent = await fetchWpRecentPosts(20);
+  if (!recent.length) return null;
+
+  // Try to find a WP post published within 30 days of the HumHub import date
+  if (createdAt) {
+    const humhubDate = new Date(createdAt);
+    const windowMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const close = recent.filter(p => {
+      const wpDate = new Date(p.date || 0);
+      return Math.abs(wpDate - humhubDate) < windowMs;
+    });
+    if (close.length) {
+      const idx = objectId ? (Number(objectId) % close.length) : 0;
+      console.log(`[WP] Fallback: matched by 30-day window, WP ID ${close[idx]?.id}`);
+      return wpPostToPreview(close[idx] || close[0], objectId);
+    }
+  }
+
+  // Last resort: most recent WP post
+  console.log(`[WP] Last resort: using most recent WP post for objectId=${objectId}`);
+  return wpPostToPreview(recent[0], objectId);
 }
 
 // ── Type normalisation ────────────────────────────────────────────────────────
@@ -220,8 +266,8 @@ async function fetchPreview(type, objectId, token) {
           size:          f.size,
           humanSize:     f.human_size || humanSize(f.size),
           folderId:      f.folder_id,
-          downloadPath:  `/api/drive/file/${objectId}/download`,
-          thumbnailPath: `/api/drive/file/${objectId}/thumbnail`,
+          downloadPath:  `/drive/file/${objectId}/download`,
+          thumbnailPath: `/drive/file/${objectId}/thumbnail?v=2`,
         },
       };
     }
@@ -252,7 +298,8 @@ async function fetchPreview(type, objectId, token) {
           size:         file.size,
           humanSize:    humanSize(file.size),
           filename:     file.file_name || file.name,
-          downloadPath: `/api/cfiles/file/${fileId}/download`,
+          downloadPath: `/cfiles/file/${fileId}/download`,
+          thumbnailPath: `/cfiles/file/${fileId}/thumbnail?v=2`,
         },
       };
     }
@@ -371,8 +418,10 @@ async function enrichItems(rawItems, token) {
   await mapLimit(items, CONCURRENCY, async (item, index) => {
     const raw = sources[index];
 
-    // Server already provides preview (BG-01 deployed) — nothing to do.
-    if (raw?.preview?.title) {
+    // Server already provides preview (BG-01 deployed) — skip WP fetch.
+    // EXCEPT for 'article' type: HumHub sends a generic placeholder title,
+    // we always override with real WordPress data.
+    if (raw?.preview?.title && item.type !== 'article') {
       Object.assign(item, {
         title:    raw.preview.title,
         excerpt:  raw.preview.excerpt   || '',
@@ -391,26 +440,28 @@ async function enrichItems(rawItems, token) {
         item.title   = f.file_name || f.title || 'Fichier';
         item.excerpt = humanSize(f.size) || '';
         item.extra   = {
-          filename:     f.file_name || f.name,
-          mimeType:     f.mime_type,
-          size:         f.size,
-          humanSize:    humanSize(f.size),
-          downloadPath: `/api/cfiles/file/${f.id}/download`,
+          filename:      f.file_name || f.name,
+          mimeType:      f.mime_type,
+          size:          f.size,
+          humanSize:     humanSize(f.size),
+          downloadPath:  `/cfiles/file/${f.id}/download`,
+          thumbnailPath: `/cfiles/file/${f.id}/thumbnail`,
         };
       } else {
-        item.extra = { downloadPath: `/api/cfiles/file/${item.objectId}/download` };
+        item.extra = {
+          downloadPath:  `/cfiles/file/${item.objectId}/download`,
+          thumbnailPath: `/cfiles/file/${item.objectId}/thumbnail`,
+        };
       }
       return;
     }
-
-    const key = `${item.objectModel}:${item.objectId}`;
 
     // ── DEDUPLICATION ────────────────────────────────────────────────────────
     // If this objectId is already cached: zero sockets used.
     // If another concurrent enrichItems is already fetching it: share the
     // in-flight promise instead of opening a second socket.
-    // This is the primary fix for socket starvation.
     let preview;
+    const key = `${item.objectModel}:${item.objectId}`;
     const cachedVal = previewCache.get(key);
 
     if (cachedVal !== undefined) {
@@ -426,8 +477,15 @@ async function enrichItems(rawItems, token) {
       const fetchPromise = (async () => {
         try {
           if (item.type === 'article') {
-            const createdAt = (raw.metadata?.created_at || '').slice(0, 10);
-            return await fetchArticleFromWp(createdAt, item.id);
+            const createdAt = raw.metadata?.created_at || '';
+            // Bust WP cache for today so freshly-published articles are picked up
+            const today = new Date().toISOString().slice(0, 10);
+            if (createdAt.startsWith(today)) {
+              wpCache.delete(`wp:date:${today}`);
+              wpCache.delete('wp:recent:20');
+              previewCache.delete(key);
+            }
+            return await fetchArticleFromWp(createdAt, item.objectId ?? item.id);
           }
           return await fetchPreview(item.type, item.objectId, token);
         } catch (_) {
@@ -461,6 +519,48 @@ async function enrichItems(rawItems, token) {
   return items;
 }
 
+/**
+ * Fires thumbnail generation for every drive_file / cfile item in the list.
+ * Runs entirely in the background — never delays the feed response.
+ */
+function _prewarmThumbnails(items, token) {
+  const SUPPORTED = new Set(['pdf','doc','docx','ppt','pptx','xls','xlsx','odt','odp','ods']);
+
+  for (const item of items) {
+    if (item.type !== 'drive_file' && item.type !== 'cfile') continue;
+
+    const thumbPath = item.extra?.thumbnailPath;
+    const filename  = item.extra?.filename || '';
+    const ext       = filename.split('.').pop().toLowerCase();
+
+    if (!thumbPath || !SUPPORTED.has(ext)) continue;
+
+    // Already cached? Skip.
+    const cacheKey = item.type === 'cfile'
+      ? `thumb:cfile:${item.objectId}`
+      : `thumb:drive:${item.objectId}`;
+
+    const { thumbCache } = require('./thumbnail');
+    if (thumbCache && thumbCache.get(cacheKey)) continue;  // already warm
+
+    // Fire and forget — do NOT await
+    const { generateThumbnail } = require('./thumbnail');
+    const downloadPath = item.type === 'cfile'
+      ? `/cfiles/file/${item.objectId}/download`
+      : null;  // drive uses default
+
+    generateThumbnail(item.objectId, token, cacheKey, filename, downloadPath)
+      .then(jpeg => {
+        if (jpeg) {
+          console.log(`[prewarm] ✓ ${item.type} ${item.objectId} (${filename}) — ${jpeg.length} bytes cached`);
+        }
+      })
+      .catch(err => {
+        console.warn(`[prewarm] ✗ ${item.type} ${item.objectId} — ${err.message}`);
+      });
+  }
+}
+
 module.exports = {
   enrichItems,
   normalizeType,
@@ -471,3 +571,5 @@ module.exports = {
   humanSize,
   previewCache,
 };
+
+

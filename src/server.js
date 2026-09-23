@@ -149,6 +149,8 @@ app.use('/api/drive', driveRoutes);
 const { requireAuth: requireAuthMiddleware } = require('./middleware/humhubAuth');
 const driveCtrl = require('./controllers/drive.controller');
 app.get('/api/cfiles/file/:id/download', requireAuthMiddleware, driveCtrl.downloadCfile);
+app.get('/api/cfiles/file/:id/thumbnail', requireAuthMiddleware, driveCtrl.thumbnailCfile);
+app.head('/api/cfiles/file/:id/thumbnail', requireAuthMiddleware, driveCtrl.thumbnailCfile);
 app.use('/api/spaces', spaceRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/likes', likeRoutes);

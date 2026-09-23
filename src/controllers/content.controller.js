@@ -23,45 +23,66 @@ function cleanWpHtml(html) {
 }
 
 
-/** Fetch the best matching WordPress post for an article by date. */
-async function fetchWpArticle(createdAt) {
-  if (!createdAt) return null;
+/** Fetch the best matching WordPress post for an article by date, with fallback. */
+async function fetchWpArticle(createdAt, objectId) {
   try {
-    const day    = createdAt.slice(0, 10);
-    const after  = `${day}T00:00:00`;
-    const before = `${day}T23:59:59`;
-    const { data } = await axios.get(`${WP_API}/posts`, {
-      params: { per_page: 5, after, before, _embed: 'wp:featuredmedia', orderby: 'date', order: 'desc' },
-      timeout: 10000,
-    });
-    const posts = Array.isArray(data) ? data : [];
-    const p = posts[0];
-    if (!p) return null;
-
-    const media = p._embedded?.['wp:featuredmedia']?.[0];
-    const imageUrl = media?.source_url || null;
-
-    // Keep ALL inline images — they are content (e.g. newspaper scans in revue de presse).
-    // Only remove the first <img> if its src matches the featured image exactly,
-    // to avoid the cover image appearing twice at the very top of the body.
-    let body = p.content?.rendered || '';
-    if (imageUrl) {
-      // Remove only the first occurrence of the featured image in the body
-      const escapedUrl = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      body = body.replace(
-        new RegExp(`<figure[^>]*>[\\s\\S]*?<img[^>]*src=["'][^"']*${escapedUrl.split('/').pop()}[^"']*["'][^>]*>[\\s\\S]*?<\\/figure>`, 'i'),
-        '',
-      );
+    // Strategy 1: exact date match
+    if (createdAt) {
+      const day    = createdAt.slice(0, 10);
+      const after  = `${day}T00:00:00`;
+      const before = `${day}T23:59:59`;
+      const { data } = await axios.get(`${WP_API}/posts`, {
+        params: { per_page: 5, after, before, _embed: 'wp:featuredmedia', orderby: 'date', order: 'desc' },
+        timeout: 10000,
+      });
+      const posts = Array.isArray(data) ? data : [];
+      if (posts.length) return buildWpPreview(posts[0]);
     }
 
-    return {
-      title:      (p.title?.rendered || '').replace(/&#8211;/g, '–').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').trim(),
-      body: cleanWpHtml(body),
-      bodyFormat: 'html',
-      imageUrl,
-      extra:      { wpId: p.id, wpUrl: p.link },
-    };
+    // Strategy 2: fetch recent 20 WP posts, match within 30-day window
+    const { data: recent } = await axios.get(`${WP_API}/posts`, {
+      params: { per_page: 20, _embed: 'wp:featuredmedia', orderby: 'date', order: 'desc' },
+      timeout: 10000,
+    });
+    const recentPosts = Array.isArray(recent) ? recent : [];
+    if (!recentPosts.length) return null;
+
+    if (createdAt) {
+      const humhubDate = new Date(createdAt);
+      const windowMs   = 30 * 24 * 60 * 60 * 1000;
+      const close = recentPosts.filter(p => Math.abs(new Date(p.date || 0) - humhubDate) < windowMs);
+      if (close.length) {
+        const idx = objectId ? (Number(objectId) % close.length) : 0;
+        return buildWpPreview(close[idx] || close[0]);
+      }
+    }
+
+    // Last resort: most recent post
+    return buildWpPreview(recentPosts[0]);
   } catch (_) { return null; }
+}
+
+function buildWpPreview(p) {
+  if (!p) return null;
+  const media    = p._embedded?.['wp:featuredmedia']?.[0];
+  const imageUrl = media?.source_url || null;
+
+  let body = p.content?.rendered || '';
+  if (imageUrl) {
+    const escapedUrl = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    body = body.replace(
+      new RegExp(`<figure[^>]*>[\\s\\S]*?<img[^>]*src=["'][^"']*${escapedUrl.split('/').pop()}[^"']*["'][^>]*>[\\s\\S]*?<\\/figure>`, 'i'),
+      '',
+    );
+  }
+
+  return {
+    title:      (p.title?.rendered || '').replace(/&#8211;/g, '–').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').trim(),
+    body:       cleanWpHtml(body),
+    bodyFormat: 'html',
+    imageUrl,
+    extra:      { wpId: p.id, wpUrl: p.link },
+  };
 }
 
 /** Charge le modèle spécialisé et en extrait le corps complet. */
@@ -82,8 +103,8 @@ async function loadBody(type, objectId, token, createdAt) {
 
     case 'article': {
       // MajlissPost / ImportArticle — no HumHub REST endpoint.
-      // Fetch from WordPress by the content's created_at date.
-      return fetchWpArticle(createdAt);
+      // Fetch from WordPress using date + 30-day fallback window.
+      return fetchWpArticle(createdAt, objectId);
     }
 
     case 'calendar': {

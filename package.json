@@ -20,6 +20,7 @@
     "@sparticuz/chromium": "^153.0.0",
     "axios": "^1.7.7",
     "bcryptjs": "^2.4.3",
+    "canvas": "^3.2.3",
     "compression": "^1.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -32,6 +33,7 @@
     "morgan": "^1.10.0",
     "multer": "^2.0.1",
     "mysql2": "^3.14.1",
+    "pdfjs-dist": "3.11.174",
     "puppeteer-core": "^25.11.0",
     "uuid": "^11.1.0"
   },

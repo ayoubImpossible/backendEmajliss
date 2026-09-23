@@ -79,6 +79,10 @@ class TtlCache {
     this.map.clear();
   }
 
+  delete(key) {
+    this.map.delete(key);
+  }
+
   get size() {
     return this.map.size;
   }

@@ -109,6 +109,7 @@ exports.likeStatus = async (req, res, next) => {
     const { data } = await http.get('/emajlis/like/status', {
       ...asUser(req.humhubToken),
       params: { model, pk },
+      timeout: 5000, // fast timeout — like status is non-critical
     });
     result = data;
   } catch (err) {
@@ -119,6 +120,7 @@ exports.likeStatus = async (req, res, next) => {
       const { data } = await http.get('/like/find-by-object', {
         ...asUser(req.humhubToken),
         params: { model, pk },
+        timeout: 5000,
       });
       result = { counter: data.total ?? 0, currentUserLiked: null, degraded: true };
     } catch (err2) {

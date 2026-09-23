@@ -60,11 +60,25 @@ exports.getFeed = async (req, res, next) => {
     });
     const rawResults = filtered.slice(0, limit);
     
-    const results = await enrichItems(rawResults, token);
+    const enriched = await enrichItems(rawResults, token);
+
+    // Deduplicate articles by wpId — HumHub creates both MajlissPost + ImportArticle for the same WP article
+    const seenWpIds = new Set();
+    const results = enriched.filter((item) => {
+      const wpId = item.extra?.wpId;
+      if (wpId) {
+        if (seenWpIds.has(wpId)) return false; // skip duplicate
+        seenWpIds.add(wpId);
+      }
+      return true;
+    });
     
     // Rebuild pagination with correct numbers
     const total = totalFromHumHub;
     const pages = Math.ceil(total / limit) || 1;
+    // Disable HTTP caching — feed content changes frequently and thumbnailPaths
+    // must always reflect the latest enrichment (never serve stale 304s).
+    res.setHeader('Cache-Control', 'no-store');
     res.json({ total, pages, page, results });
   } catch (err) { 
     console.error('[getFeed] ERROR:', err.response?.status, err.message);
@@ -97,7 +111,33 @@ exports.searchTypes = async (req, res, next) => {
     const list = Array.isArray(data)
       ? data
       : (data?.results || data?.items || data?.types || []);
-    res.json({ results: list });
+
+    // Types to hide from the feed filter bar:
+    // - Page globale, Dossier (drive+cfiles), Media, Article importé — not useful
+    const HIDDEN = [
+      'custom_pages', 'CustomPage', 'TemplateInstance',
+      'DriveFolder', 'cfiles\\models\\Folder', 'cfolder',
+      'Media', 'gallery',
+      'ImportArticle', 'import_article',
+      'MajlissPost', 'externalHtmlStream',
+      'wiki',
+    ];
+
+    const filtered = list.filter((ty) => {
+      const key = ty.class || ty.value || ty.id || ty.type || ty.model || ty.name || '';
+      return !HIDDEN.some(h => key.toLowerCase().includes(h.toLowerCase()));
+    });
+
+    // Deduplicate by label (removes "Fichier" duplicate even from different classes)
+    const seenLabels = new Set();
+    const deduped = filtered.filter((ty) => {
+      const label = (ty.label || ty.title || ty.name || ty.fr || ty.display_name || '').toLowerCase().trim();
+      if (!label || seenLabels.has(label)) return false;
+      seenLabels.add(label);
+      return true;
+    });
+
+    res.json({ results: deduped });
   } catch (err) { next(err); }
 };
 
