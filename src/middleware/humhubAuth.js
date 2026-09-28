@@ -80,12 +80,15 @@ async function isEserviceManager(token) {
 }
 
 async function requireAuth(req, res, next) {
-  const match = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
-  if (!match) return res.status(401).json({ error: "Jeton d'authentification requis." });
+  // Accept token from Authorization header OR ?token= query param (for WebView file viewing)
+  const headerMatch = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
+  const token = headerMatch?.[1] || req.query.token || null;
+
+  if (!token) return res.status(401).json({ error: "Jeton d'authentification requis." });
 
   try {
-    req.humhubToken = match[1];
-    req.user = await resolveHumHubUser(match[1]);
+    req.humhubToken = token;
+    req.user = await resolveHumHubUser(token);
     return next();
   } catch (err) {
     if (err.response?.status === 401) {
