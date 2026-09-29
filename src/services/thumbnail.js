@@ -205,6 +205,30 @@ function renderCover(ext, filename) {
   return canvas.toBuffer('image/jpeg', { quality: 85 });
 }
 
+// ── Extract first embedded JPEG from PDF binary ───────────────────────────────
+// PDFs store embedded images as raw JPEG streams between FF D8 ... FF D9 markers.
+// This extracts the largest one (likely the cover page image).
+function extractFirstJpegFromPdf(pdfBuffer) {
+  try {
+    const SOI = Buffer.from([0xFF, 0xD8]); // JPEG start
+    const EOI = Buffer.from([0xFF, 0xD9]); // JPEG end
+    let best = null;
+    let pos = 0;
+    while (pos < pdfBuffer.length - 4) {
+      const start = pdfBuffer.indexOf(SOI, pos);
+      if (start === -1) break;
+      const end = pdfBuffer.indexOf(EOI, start + 2);
+      if (end === -1) break;
+      const jpeg = pdfBuffer.slice(start, end + 2);
+      if (jpeg.length > 10000 && (!best || jpeg.length > best.length)) {
+        best = jpeg;
+      }
+      pos = end + 2;
+    }
+    return best;
+  } catch (_) { return null; }
+}
+
 // ── Core generator ─────────────────────────────────────────────────────────────
 async function _doGenerate(fileId, token, ext, filename, downloadPath) {
   // Download the file
@@ -231,19 +255,22 @@ async function _doGenerate(fileId, token, ext, filename, downloadPath) {
   // No colored fake covers for any file type.
   if (ext !== 'pdf') return null;
 
+  // Try pdfjs + canvas first
   const local = await renderPdfLocal(fileBuffer);
   if (local) {
-    console.log(`[thumb:${fileId}] PDF rendered via pdfjs (${local.length} bytes)`);
+    console.log(`[thumb:${fileId}] ✓ pdfjs render OK (${local.length} bytes)`);
     return local;
   }
 
-  const chromium = await renderPdfChromium(fileBuffer);
-  if (chromium) {
-    console.log(`[thumb:${fileId}] PDF rendered via chromium (${chromium.length} bytes)`);
-    return chromium;
+  // pdfjs produced blank canvas (napi-rs/canvas missing features) — skip chromium
+  // Instead use a simple approach: extract embedded JPEG from PDF if present
+  const embedded = extractFirstJpegFromPdf(fileBuffer);
+  if (embedded) {
+    console.log(`[thumb:${fileId}] ✓ embedded JPEG extracted (${embedded.length} bytes)`);
+    return embedded;
   }
 
-  console.log(`[thumb:${fileId}] PDF render failed — no thumbnail`);
+  console.log(`[thumb:${fileId}] all render methods failed`);
   return null;
 }
 
