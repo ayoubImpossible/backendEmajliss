@@ -84,18 +84,21 @@ app.use(cors({
 
 app.use(rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_MAX) || 500,
+  max: Number(process.env.RATE_LIMIT_MAX) || 5000,
   standardHeaders: true,
   legacyHeaders: false,
+  // Use X-Forwarded-For to identify real clients behind Railway/Vercel proxy
+  keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
 }));
 
 // Limite plus stricte sur la connexion : protÃ¨ge aussi le formulaire web.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 20,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 50,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Trop de tentatives de connexion. RÃ©essayez dans quelques minutes.' },
+  message: { error: 'Trop de tentatives de connexion. Réessayez dans quelques minutes.' },
+  keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
 });
 
 // â”€â”€ Parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
