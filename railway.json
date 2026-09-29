@@ -1,7 +1,4 @@
 {
-  "build": {
-    "builder": "NIXPACKS"
-  },
   "deploy": {
     "startCommand": "node src/server.js",
     "healthcheckPath": "/ping",
