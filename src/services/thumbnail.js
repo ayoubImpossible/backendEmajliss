@@ -98,16 +98,20 @@ async function renderPdfLocal(pdfBuffer) {
         new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 12000)),
       ]);
     } catch (renderErr) {
-      // If render itself errored (not destroy), propagate
-      if (!renderErr.message.includes('unwrap') && !renderErr.message.includes('InvalidArg')) {
+      console.warn(`[thumbnail/pdfjs] render error: ${renderErr.message} (code: ${renderErr.code})`);
+      // If it's ONLY the napi destroy error, the canvas IS rendered — continue
+      if (renderErr.code !== 'InvalidArg' && !renderErr.message.includes('unwrap')) {
         throw renderErr;
       }
-      // Otherwise the canvas IS rendered — just the cleanup crashed, continue
     }
 
     const jpeg = canvas.toBuffer('image/jpeg', { quality: 82 });
-    console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes`);
-    return jpeg.length > 5000 ? jpeg : null;
+    console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes, canvas ${Math.round(viewport.width)}x${Math.round(viewport.height)}`);
+    if (jpeg.length <= 5000) {
+      console.warn(`[thumbnail/pdfjs] jpeg too small (${jpeg.length} bytes) — blank canvas?`);
+      return null;
+    }
+    return jpeg;
   } catch (err) {
     console.warn(`[thumbnail/pdfjs] ${err.message}`);
     return null;
