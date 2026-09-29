@@ -34,7 +34,7 @@ try {
 } catch (_) {}
 
 function diskPath(key) {
-  return path.join(DISK_DIR, key.replace(/[^a-z0-9_:-]/gi, '_') + '.jpg');
+  return path.join(DISK_DIR, 'v2_' + key.replace(/[^a-z0-9_:-]/gi, '_') + '.jpg');
 }
 function loadFromDisk(key) {
   if (!diskEnabled) return null;
@@ -206,17 +206,13 @@ async function _doGenerate(fileId, token, ext, filename, downloadPath) {
       console.log(`[thumb:${fileId}] PDF rendered via chromium (${chromium.length} bytes)`);
       return chromium;
     }
-    // Last fallback: canvas cover
-    return renderCover(ext, filename);
+    // No real thumbnail available — return null (card shows standard layout)
+    console.log(`[thumb:${fileId}] PDF render failed — no thumbnail`);
+    return null;
   }
 
-  // Office files — canvas cover (local only, null on Vercel)
-  if (createCanvas) {
-    console.log(`[thumb:${fileId}] Office file — canvas cover`);
-    return renderCover(ext, filename);
-  }
-
-  console.log(`[thumb:${fileId}] Office file on Vercel — no canvas, returning null`);
+  // Office files — no colored cover, just return null so card shows standard layout
+  console.log(`[thumb:${fileId}] Office file — no thumbnail generated`);
   return null;
 }
 
