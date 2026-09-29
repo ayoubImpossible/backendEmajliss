@@ -225,6 +225,22 @@ app.get('/api/proxy-html', requireAuth, async (req, res) => {
 });
 
 // â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Canvas / pdfjs diagnostic (no auth needed) ───────────────────────────────
+app.get('/canvas-test', async (req, res) => {
+  const results = {};
+  try {
+    const c = require('@napi-rs/canvas');
+    const cv = c.createCanvas(10, 10);
+    cv.getContext('2d');
+    results.canvas = '@napi-rs/canvas OK';
+  } catch(e) { results.canvas = `FAIL: ${e.message}`; }
+  try {
+    const p = require('pdfjs-dist/legacy/build/pdf.js');
+    results.pdfjs = `pdfjs OK v${p.version || 'unknown'}`;
+  } catch(e) { results.pdfjs = `FAIL: ${e.message}`; }
+  res.json(results);
+});
+
 app.use((req, res) =>
   res.status(404).json({ error: `Route non trouvÃ©e : ${req.method} ${req.path}` }),
 );
