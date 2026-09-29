@@ -46,6 +46,9 @@ const { comments: commentRoutes, likes: likeRoutes } = require('./routes/social.
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
+// Trust Railway/Vercel/Render proxy — required for express-rate-limit behind a load balancer
+app.set('trust proxy', 1);
+
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
 // On Vercel/serverless the filesystem is read-only — skip directory creation
 try {
