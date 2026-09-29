@@ -63,6 +63,22 @@ async function renderPdfLocal(pdfBuffer) {
   try {
     const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 
+    // Patch pdfjs NodeCanvasFactory.destroy to avoid @napi-rs/canvas crash
+    // pdfjs tries to set canvas.width/height = 0 which @napi-rs/canvas rejects
+    const origFactory = pdfjsLib.NodeCanvasFactory;
+    if (origFactory && origFactory.prototype) {
+      origFactory.prototype.destroy = function(canvasAndCtx) {
+        try {
+          if (canvasAndCtx?.canvas) {
+            canvasAndCtx.canvas.width  = 1;
+            canvasAndCtx.canvas.height = 1;
+          }
+        } catch (_) {}
+        canvasAndCtx.canvas  = null;
+        canvasAndCtx.context = null;
+      };
+    }
+
     const data = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
     const doc = await Promise.race([
       pdfjsLib.getDocument({ data, stopAtErrors: false }).promise,
@@ -75,10 +91,19 @@ async function renderPdfLocal(pdfBuffer) {
     const canvas   = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
     const ctx      = canvas.getContext('2d');
 
-    await Promise.race([
-      page.render({ canvasContext: ctx, viewport }).promise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 12000)),
-    ]);
+    const renderTask = page.render({ canvasContext: ctx, viewport });
+    try {
+      await Promise.race([
+        renderTask.promise,
+        new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 12000)),
+      ]);
+    } catch (renderErr) {
+      // If render itself errored (not destroy), propagate
+      if (!renderErr.message.includes('unwrap') && !renderErr.message.includes('InvalidArg')) {
+        throw renderErr;
+      }
+      // Otherwise the canvas IS rendered — just the cleanup crashed, continue
+    }
 
     const jpeg = canvas.toBuffer('image/jpeg', { quality: 82 });
     console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes`);
