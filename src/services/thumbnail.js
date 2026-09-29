@@ -34,7 +34,7 @@ try {
 } catch (_) {}
 
 function diskPath(key) {
-  return path.join(DISK_DIR, 'v2_' + key.replace(/[^a-z0-9_:-]/gi, '_') + '.jpg');
+  return path.join(DISK_DIR, 'v3_' + key.replace(/[^a-z0-9_:-]/gi, '_') + '.jpg');
 }
 function loadFromDisk(key) {
   if (!diskEnabled) return null;
@@ -192,27 +192,23 @@ async function _doGenerate(fileId, token, ext, filename, downloadPath) {
 
   if (!fileBuffer || fileBuffer.length === 0) return null;
 
-  if (ext === 'pdf') {
-    // Try pdfjs + canvas first (local server)
-    const local = await renderPdfLocal(fileBuffer);
-    if (local) {
-      console.log(`[thumb:${fileId}] PDF rendered via pdfjs (${local.length} bytes)`);
-      return local;
-    }
-    // Fallback: chromium (Vercel)
-    console.log(`[thumb:${fileId}] pdfjs unavailable — trying chromium`);
-    const chromium = await renderPdfChromium(fileBuffer);
-    if (chromium) {
-      console.log(`[thumb:${fileId}] PDF rendered via chromium (${chromium.length} bytes)`);
-      return chromium;
-    }
-    // No real thumbnail available — return null (card shows standard layout)
-    console.log(`[thumb:${fileId}] PDF render failed — no thumbnail`);
-    return null;
+  // Only generate real thumbnails for PDFs via pdfjs or chromium.
+  // No colored fake covers for any file type.
+  if (ext !== 'pdf') return null;
+
+  const local = await renderPdfLocal(fileBuffer);
+  if (local) {
+    console.log(`[thumb:${fileId}] PDF rendered via pdfjs (${local.length} bytes)`);
+    return local;
   }
 
-  // Office files — no colored cover, just return null so card shows standard layout
-  console.log(`[thumb:${fileId}] Office file — no thumbnail generated`);
+  const chromium = await renderPdfChromium(fileBuffer);
+  if (chromium) {
+    console.log(`[thumb:${fileId}] PDF rendered via chromium (${chromium.length} bytes)`);
+    return chromium;
+  }
+
+  console.log(`[thumb:${fileId}] PDF render failed — no thumbnail`);
   return null;
 }
 
