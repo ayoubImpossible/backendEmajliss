@@ -60,9 +60,30 @@ async function renderPdfLocal(pdfBuffer) {
   if (!createCanvas) return null;
   try {
     const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+
+    // NodeCanvasFactory required for pdfjs to work with node-canvas
+    const NodeCanvasFactory = {
+      create(width, height) {
+        const canvas = createCanvas(width, height);
+        return { canvas, context: canvas.getContext('2d') };
+      },
+      reset(canvasAndCtx, width, height) {
+        canvasAndCtx.canvas.width  = width;
+        canvasAndCtx.canvas.height = height;
+      },
+      destroy(canvasAndCtx) {
+        canvasAndCtx.canvas.width  = 0;
+        canvasAndCtx.canvas.height = 0;
+      },
+    };
+
     const data = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
     const doc = await Promise.race([
-      pdfjsLib.getDocument({ data, stopAtErrors: false }).promise,
+      pdfjsLib.getDocument({
+        data,
+        stopAtErrors: false,
+        CanvasFactory: NodeCanvasFactory,
+      }).promise,
       new Promise((_, rej) => setTimeout(() => rej(new Error('pdfjs timeout')), 12000)),
     ]);
     if (!doc || doc.numPages < 1) return null;
@@ -72,10 +93,15 @@ async function renderPdfLocal(pdfBuffer) {
     const canvas   = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
     const ctx      = canvas.getContext('2d');
     await Promise.race([
-      page.render({ canvasContext: ctx, viewport }).promise,
+      page.render({
+        canvasContext: ctx,
+        viewport,
+        canvasFactory: NodeCanvasFactory,
+      }).promise,
       new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 10000)),
     ]);
     const jpeg = canvas.toBuffer('image/jpeg', { quality: 0.82 });
+    console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes`);
     return jpeg.length > 5000 ? jpeg : null;
   } catch (err) {
     console.warn(`[thumbnail/pdfjs] ${err.message}`);
