@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "cairo", "pango", "libpng", "libjpeg", "giflib", "librsvg", "pixman", "pkg-config", "python3"]
+
+[phases.install]
+cmds = ["npm install --ignore-scripts=false"]
+
+[start]
+cmd = "node src/server.js"
