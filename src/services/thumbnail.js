@@ -18,9 +18,11 @@ const path = require('path');
 const { TtlCache }     = require('./cache');
 const { http, asUser } = require('./humhub');
 
-// ── canvas — optional, only available on local server ────────────────────────
+// ── canvas — optional, only available when @napi-rs/canvas is installed ───────
 let createCanvas = null;
-try { createCanvas = require('canvas').createCanvas; } catch (_) {}
+try { createCanvas = require('@napi-rs/canvas').createCanvas; } catch (_) {
+  try { createCanvas = require('canvas').createCanvas; } catch (_) {}
+}
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
 const thumbCache = new TtlCache(60 * 60 * 1000, 500); // 1 h, max 500 entries
@@ -100,7 +102,7 @@ async function renderPdfLocal(pdfBuffer) {
       }).promise,
       new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 10000)),
     ]);
-    const jpeg = canvas.toBuffer('image/jpeg', { quality: 0.82 });
+    const jpeg = canvas.toBuffer('image/jpeg', { quality: 82 });
     console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes`);
     return jpeg.length > 5000 ? jpeg : null;
   } catch (err) {
@@ -193,7 +195,7 @@ function renderCover(ext, filename) {
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillText(name, 24 + badgeW + 14, H - 39);
   }
-  return canvas.toBuffer('image/jpeg', { quality: 0.85 });
+  return canvas.toBuffer('image/jpeg', { quality: 85 });
 }
 
 // ── Core generator ─────────────────────────────────────────────────────────────

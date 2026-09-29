@@ -9,7 +9,7 @@
     "db:seed": "node src/database/seed.js"
   },
   "installConfig": {
-    "allowedScripts": ["canvas", "@firebase/util", "protobufjs"]
+    "allowedScripts": ["@napi-rs/canvas", "@firebase/util", "protobufjs"]
   },
   "keywords": [
     "csefrs",
@@ -23,7 +23,7 @@
     "@sparticuz/chromium": "^153.0.0",
     "axios": "^1.7.7",
     "bcryptjs": "^2.4.3",
-    "canvas": "^3.2.3",
+    "@napi-rs/canvas": "^0.1.67",
     "compression": "^1.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
