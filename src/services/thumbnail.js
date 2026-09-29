@@ -63,45 +63,23 @@ async function renderPdfLocal(pdfBuffer) {
   try {
     const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 
-    // NodeCanvasFactory required for pdfjs to work with node-canvas
-    const NodeCanvasFactory = {
-      create(width, height) {
-        const canvas = createCanvas(width, height);
-        return { canvas, context: canvas.getContext('2d') };
-      },
-      reset(canvasAndCtx, width, height) {
-        canvasAndCtx.canvas.width  = width;
-        canvasAndCtx.canvas.height = height;
-      },
-      destroy(canvasAndCtx) {
-        canvasAndCtx.canvas.width  = 0;
-        canvasAndCtx.canvas.height = 0;
-      },
-    };
-
     const data = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
     const doc = await Promise.race([
-      pdfjsLib.getDocument({
-        data,
-        stopAtErrors: false,
-        CanvasFactory: NodeCanvasFactory,
-      }).promise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('pdfjs timeout')), 12000)),
+      pdfjsLib.getDocument({ data, stopAtErrors: false }).promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('pdfjs timeout')), 15000)),
     ]);
     if (!doc || doc.numPages < 1) return null;
+
     const page     = await doc.getPage(1);
-    const scale    = 800 / page.getViewport({ scale: 1 }).width;
-    const viewport = page.getViewport({ scale });
+    const viewport = page.getViewport({ scale: 2.0 });
     const canvas   = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
     const ctx      = canvas.getContext('2d');
+
     await Promise.race([
-      page.render({
-        canvasContext: ctx,
-        viewport,
-        canvasFactory: NodeCanvasFactory,
-      }).promise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 10000)),
+      page.render({ canvasContext: ctx, viewport }).promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 12000)),
     ]);
+
     const jpeg = canvas.toBuffer('image/jpeg', { quality: 82 });
     console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes`);
     return jpeg.length > 5000 ? jpeg : null;
