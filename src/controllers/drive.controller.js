@@ -158,7 +158,7 @@ exports.thumbnail = async (req, res, next) => {
   // Fast path: already cached → return instantly (or HEAD with 200)
   const cached = thumbCache.get(cacheKey);
   if (cached) {
-    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Type', cached[0] === 0x89 ? 'image/png' : 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Content-Length', cached.length);
     if (req.method === 'HEAD') return res.status(200).end();
@@ -192,7 +192,7 @@ exports.thumbnailCfile = async (req, res, next) => {
 
   const cached = thumbCache.get(cacheKey);
   if (cached) {
-    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Type', cached[0] === 0x89 ? 'image/png' : 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Content-Length', cached.length);
     if (req.method === 'HEAD') return res.status(200).end();

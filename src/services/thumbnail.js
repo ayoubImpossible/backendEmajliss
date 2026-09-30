@@ -24,6 +24,30 @@ try { createCanvas = require('@napi-rs/canvas').createCanvas; } catch (_) {
   try { createCanvas = require('canvas').createCanvas; } catch (_) {}
 }
 
+// ── Patch pdfjs NodeCanvasFactory to not crash with @napi-rs/canvas ───────────
+// pdfjs calls canvas.width = 0 in destroy() which @napi-rs/canvas rejects.
+// We monkey-patch it once at startup before any rendering.
+try {
+  const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+  if (pdfjsLib.NodeCanvasFactory && pdfjsLib.NodeCanvasFactory.prototype) {
+    pdfjsLib.NodeCanvasFactory.prototype.destroy = function(canvasAndContext) {
+      // Do NOT set width/height to 0 — @napi-rs/canvas crashes on this
+      canvasAndContext.canvas  = null;
+      canvasAndContext.context = null;
+    };
+    pdfjsLib.NodeCanvasFactory.prototype.reset = function(canvasAndContext, width, height) {
+      // Safe reset
+      if (canvasAndContext.canvas) {
+        try {
+          canvasAndContext.canvas.width  = width;
+          canvasAndContext.canvas.height = height;
+        } catch (_) {}
+      }
+    };
+    console.log('[thumbnail] pdfjs NodeCanvasFactory patched for @napi-rs/canvas');
+  }
+} catch (_) {}
+
 // ── Cache ─────────────────────────────────────────────────────────────────────
 const thumbCache = new TtlCache(60 * 60 * 1000, 500); // 1 h, max 500 entries
 
@@ -57,63 +81,23 @@ function saveToDisk(key, jpeg) {
 // ── In-flight deduplication ───────────────────────────────────────────────────
 const _inflight = new Map();
 
-// ── PDF via pdfjs + node-canvas (local server) ────────────────────────────────
+// ── PDF via pdf-to-img (uses pdfjs internally with proper canvas handling) ────
 async function renderPdfLocal(pdfBuffer) {
-  if (!createCanvas) return null;
   try {
-    const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-
-    // Patch pdfjs NodeCanvasFactory.destroy to avoid @napi-rs/canvas crash
-    // pdfjs tries to set canvas.width/height = 0 which @napi-rs/canvas rejects
-    const origFactory = pdfjsLib.NodeCanvasFactory;
-    if (origFactory && origFactory.prototype) {
-      origFactory.prototype.destroy = function(canvasAndCtx) {
-        try {
-          if (canvasAndCtx?.canvas) {
-            canvasAndCtx.canvas.width  = 1;
-            canvasAndCtx.canvas.height = 1;
-          }
-        } catch (_) {}
-        canvasAndCtx.canvas  = null;
-        canvasAndCtx.context = null;
-      };
-    }
-
-    const data = new Uint8Array(pdfBuffer.buffer, pdfBuffer.byteOffset, pdfBuffer.byteLength);
-    const doc = await Promise.race([
-      pdfjsLib.getDocument({ data, stopAtErrors: false }).promise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('pdfjs timeout')), 15000)),
-    ]);
-    if (!doc || doc.numPages < 1) return null;
-
-    const page     = await doc.getPage(1);
-    const viewport = page.getViewport({ scale: 2.0 });
-    const canvas   = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
-    const ctx      = canvas.getContext('2d');
-
-    const renderTask = page.render({ canvasContext: ctx, viewport });
-    try {
-      await Promise.race([
-        renderTask.promise,
-        new Promise((_, rej) => setTimeout(() => rej(new Error('render timeout')), 12000)),
-      ]);
-    } catch (renderErr) {
-      console.warn(`[thumbnail/pdfjs] render error: ${renderErr.message} (code: ${renderErr.code})`);
-      // If it's ONLY the napi destroy error, the canvas IS rendered — continue
-      if (renderErr.code !== 'InvalidArg' && !renderErr.message.includes('unwrap')) {
-        throw renderErr;
+    const { pdf } = require('pdf-to-img');
+    const doc = await pdf(pdfBuffer, { scale: 2 });
+    // Get first page
+    for await (const page of doc) {
+      // page is a Buffer (PNG)
+      if (page && page.length > 5000) {
+        console.log(`[thumbnail/pdf-to-img] rendered ${page.length} bytes`);
+        return page; // Return PNG directly — browser/RN handles it fine
       }
+      break; // only first page
     }
-
-    const jpeg = canvas.toBuffer('image/jpeg', { quality: 82 });
-    console.log(`[thumbnail/pdfjs] rendered ${jpeg.length} bytes, canvas ${Math.round(viewport.width)}x${Math.round(viewport.height)}`);
-    if (jpeg.length <= 5000) {
-      console.warn(`[thumbnail/pdfjs] jpeg too small (${jpeg.length} bytes) — blank canvas?`);
-      return null;
-    }
-    return jpeg;
+    return null;
   } catch (err) {
-    console.warn(`[thumbnail/pdfjs] ${err.message}`);
+    console.warn(`[thumbnail/pdf-to-img] ${err.message}`);
     return null;
   }
 }
