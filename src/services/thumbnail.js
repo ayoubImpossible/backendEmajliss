@@ -84,7 +84,8 @@ const _inflight = new Map();
 // ── PDF via pdf-to-img (uses pdfjs internally with proper canvas handling) ────
 async function renderPdfLocal(pdfBuffer) {
   try {
-    const { pdf } = require('pdf-to-img');
+    // pdf-to-img uses ESM top-level await — must use dynamic import(), not require()
+    const { pdf } = await import('pdf-to-img');
     const doc = await pdf(pdfBuffer, { scale: 2 });
     // Get first page
     for await (const page of doc) {
