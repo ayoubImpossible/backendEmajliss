@@ -127,13 +127,7 @@ http.interceptors.response.use(
 );
 
 /** En-tête d'autorisation pour le jeton d'un utilisateur. */
-const asUser = (token) => ({
-  headers: {
-    Authorization: `Bearer ${token}`,
-    'Cache-Control': 'no-cache',
-    'Pragma': 'no-cache',
-  },
-});
+const asUser = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
 
 /**
  * GET qui ne lève pas : renvoie null sur 404 / 403 / erreur réseau.

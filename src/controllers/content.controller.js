@@ -230,10 +230,7 @@ exports.show = async (req, res, next) => {
   const token = req.humhubToken;
 
   try {
-    const { data } = await http.get(`/content/${req.params.id}`, {
-      ...asUser(token),
-      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
-    });
+    const { data } = await http.get(`/content/${req.params.id}`, asUser(token));
     const meta      = data.metadata || {};
     const type      = normalizeType(meta.object_model || '');
     const createdAt = meta.created_at || null;
