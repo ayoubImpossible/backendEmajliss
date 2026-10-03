@@ -85,18 +85,22 @@ function wpPostToPreview(p, humhubId) {
 }
 
 async function fetchArticleFromWp(createdAt, objectId) {
-  // Strategy 1: match by date — ONLY if exactly 1 post that day
-  // Multiple posts same day = ambiguous, cannot reliably match
-  if (createdAt) {
-    const posts = await fetchWpPostsByDate(createdAt);
-    if (posts.length === 1) {
-      return wpPostToPreview(posts[0], objectId);
-    }
-    // Multiple posts same day or no posts → cannot safely match
+  if (!createdAt) return null;
+
+  const posts = await fetchWpPostsByDate(createdAt);
+
+  if (posts.length === 0) return null;
+
+  if (posts.length === 1) {
+    // Only 1 post that day — safe match
+    return wpPostToPreview(posts[0], objectId);
   }
 
-  // No reliable match → return null (app shows generic title/excerpt from feed)
-  return null;
+  // Multiple posts on same day — sort by WP ID ascending (oldest first)
+  // and use objectId modulo to pick consistently
+  const sorted = [...posts].sort((a, b) => a.id - b.id);
+  const idx = objectId ? (Number(objectId) % sorted.length) : 0;
+  return wpPostToPreview(sorted[idx] || sorted[0], objectId);
 }
 
 // ── Type normalisation ────────────────────────────────────────────────────────
@@ -410,8 +414,7 @@ async function enrichItems(rawItems, token) {
       return;
     }
 
-    // For articles: use HumHub preview title directly (it contains the real title
-    // from MajlissPost/ImportArticle). Only try WP if we need the full body image/excerpt.
+    // For articles: try HumHub directly first, then WP as fallback
     if (item.type === 'article' && raw?.preview?.title) {
       // Use HumHub title as base, then try to enrich with WP image/excerpt
       item.title = raw.preview.title;
