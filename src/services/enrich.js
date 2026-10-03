@@ -85,22 +85,17 @@ function wpPostToPreview(p, humhubId) {
 }
 
 async function fetchArticleFromWp(createdAt, objectId) {
-  // Strategy 1: match by date (fast, works when WP publish date = HumHub import date)
+  // Strategy 1: match by date — ONLY if exactly 1 post that day
+  // Multiple posts same day = ambiguous, cannot reliably match
   if (createdAt) {
     const posts = await fetchWpPostsByDate(createdAt);
     if (posts.length === 1) {
-      // Only 1 post that day — safe to use it
       return wpPostToPreview(posts[0], objectId);
     }
-    if (posts.length > 1) {
-      // Multiple posts same day — use objectId modulo to pick consistently
-      const idx = objectId ? (Number(objectId) % posts.length) : 0;
-      return wpPostToPreview(posts[idx] || posts[0], objectId);
-    }
+    // Multiple posts same day or no posts → cannot safely match
   }
 
-  // No date match and no safe fallback — return null rather than wrong content
-  // The app will show the excerpt from the feed instead
+  // No reliable match → return null (app shows generic title/excerpt from feed)
   return null;
 }
 

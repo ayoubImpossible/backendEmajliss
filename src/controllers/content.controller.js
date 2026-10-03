@@ -42,7 +42,8 @@ async function fetchWpArticle(createdAt, objectId, metaUrl) {
       }
     }
 
-    // Strategy 2: exact date match — only return if exactly 1 post that day
+    // Strategy 2: exact date match — ONLY return if exactly 1 post that day
+    // Multiple posts same day = ambiguous, cannot reliably match = return null
     if (createdAt) {
       const day    = createdAt.slice(0, 10);
       const after  = `${day}T00:00:00`;
@@ -52,16 +53,12 @@ async function fetchWpArticle(createdAt, objectId, metaUrl) {
         timeout: 10000,
       });
       const posts = Array.isArray(data) ? data : [];
-      // Only use date match if there is exactly 1 post that day — avoids wrong match
+      // Only use date match if there is EXACTLY 1 post that day
       if (posts.length === 1) return buildWpPreview(posts[0]);
-      // If multiple posts same day, use objectId to pick consistently
-      if (posts.length > 1) {
-        const idx = objectId ? (Number(objectId) % posts.length) : 0;
-        return buildWpPreview(posts[idx] || posts[0]);
-      }
+      // Multiple posts same day: cannot reliably match → return null
     }
 
-    // Strategy 3: no match found — return null, don't guess with recent posts
+    // No reliable match found → return null (app shows feed excerpt instead)
     return null;
   } catch (_) { return null; }
 }
