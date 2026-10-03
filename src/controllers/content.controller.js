@@ -24,9 +24,25 @@ function cleanWpHtml(html) {
 
 
 /** Fetch the best matching WordPress post for an article by date, with fallback. */
-async function fetchWpArticle(createdAt, objectId) {
+async function fetchWpArticle(createdAt, objectId, metaUrl) {
   try {
-    // Strategy 1: exact date match
+    // Strategy 1: search by slug extracted from HumHub URL
+    // HumHub URL format: /content/perma?id=XXX or /wiki/... etc
+    // For ImportArticle/MajlissPost the URL often contains the WP slug
+    if (metaUrl) {
+      const slug = metaUrl.split('/').filter(Boolean).pop()?.split('?')[0];
+      if (slug && slug.length > 3 && !/^\d+$/.test(slug)) {
+        try {
+          const { data: bySlug } = await axios.get(`${WP_API}/posts`, {
+            params: { slug, _embed: 'wp:featuredmedia' },
+            timeout: 10000,
+          });
+          if (Array.isArray(bySlug) && bySlug.length) return buildWpPreview(bySlug[0]);
+        } catch (_) {}
+      }
+    }
+
+    // Strategy 2: exact date match — only return if exactly 1 post that day
     if (createdAt) {
       const day    = createdAt.slice(0, 10);
       const after  = `${day}T00:00:00`;
@@ -36,29 +52,17 @@ async function fetchWpArticle(createdAt, objectId) {
         timeout: 10000,
       });
       const posts = Array.isArray(data) ? data : [];
-      if (posts.length) return buildWpPreview(posts[0]);
-    }
-
-    // Strategy 2: fetch recent 20 WP posts, match within 30-day window
-    const { data: recent } = await axios.get(`${WP_API}/posts`, {
-      params: { per_page: 20, _embed: 'wp:featuredmedia', orderby: 'date', order: 'desc' },
-      timeout: 10000,
-    });
-    const recentPosts = Array.isArray(recent) ? recent : [];
-    if (!recentPosts.length) return null;
-
-    if (createdAt) {
-      const humhubDate = new Date(createdAt);
-      const windowMs   = 30 * 24 * 60 * 60 * 1000;
-      const close = recentPosts.filter(p => Math.abs(new Date(p.date || 0) - humhubDate) < windowMs);
-      if (close.length) {
-        const idx = objectId ? (Number(objectId) % close.length) : 0;
-        return buildWpPreview(close[idx] || close[0]);
+      // Only use date match if there is exactly 1 post that day — avoids wrong match
+      if (posts.length === 1) return buildWpPreview(posts[0]);
+      // If multiple posts same day, use objectId to pick consistently
+      if (posts.length > 1) {
+        const idx = objectId ? (Number(objectId) % posts.length) : 0;
+        return buildWpPreview(posts[idx] || posts[0]);
       }
     }
 
-    // Last resort: most recent post
-    return buildWpPreview(recentPosts[0]);
+    // Strategy 3: no match found — return null, don't guess with recent posts
+    return null;
   } catch (_) { return null; }
 }
 
@@ -86,7 +90,7 @@ function buildWpPreview(p) {
 }
 
 /** Charge le modèle spécialisé et en extrait le corps complet. */
-async function loadBody(type, objectId, token, createdAt) {
+async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
   switch (type) {
 
     case 'post': {
@@ -104,7 +108,7 @@ async function loadBody(type, objectId, token, createdAt) {
     case 'article': {
       // MajlissPost / ImportArticle — no HumHub REST endpoint.
       // Fetch from WordPress using date + 30-day fallback window.
-      return fetchWpArticle(createdAt, objectId);
+      return fetchWpArticle(createdAt, objectId, metaUrl);
     }
 
     case 'calendar': {
@@ -230,8 +234,9 @@ exports.show = async (req, res, next) => {
     const meta      = data.metadata || {};
     const type      = normalizeType(meta.object_model || '');
     const createdAt = meta.created_at || null;
+    const metaUrl   = meta.url || '';
 
-    const loaded = await loadBody(type, meta.object_id, token, createdAt);
+    const loaded = await loadBody(type, meta.object_id, token, createdAt, metaUrl);
 
     res.json({
       id:          data.id,

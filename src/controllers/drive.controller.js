@@ -1,6 +1,10 @@
 ﻿'use strict';
 
 const { http, asUser } = require('../services/humhub');
+const jwt = require('jsonwebtoken');
+
+const FILE_TOKEN_SECRET = process.env.FILE_TOKEN_SECRET || process.env.JWT_SECRET || 'emajlis-file-stream-secret';
+const BASE_URL = (process.env.BASE_URL || 'https://backendemajliss-production.up.railway.app').replace(/\/+$/, '');
 
 function rewriteDownloadPaths(payload) {
   const fix = (file) => {
@@ -213,4 +217,143 @@ exports.thumbnailCfile = async (req, res, next) => {
     if (filename && !supported.includes(ext)) return;
     _startBackgroundGeneration(id, req.humhubToken, cacheKey, filename, `/cfiles/file/${id}/download`);
   } catch (_) {}
+};
+
+// ── GET /api/drive/file/:id/token ────────────────────────────────────────────
+// Returns a short-lived signed URL to stream the file without auth header.
+// Used by the app to open files in Google Docs Viewer (WebView).
+exports.fileToken = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const humhubToken = req.humhubToken;
+
+    // Verify the file exists and user has access
+    const { data } = await http.get(`/emajlis/drive/file/${id}`, asUser(humhubToken));
+    const file = data?.file || data;
+    if (!file) return res.status(404).json({ error: 'Fichier introuvable.' });
+
+    // Sign a token: embeds fileId + humhubToken, valid 10 minutes
+    const payload = { fileId: id, humhubToken, type: 'drive' };
+    const token = jwt.sign(payload, FILE_TOKEN_SECRET, { expiresIn: '10m' });
+
+    const streamUrl = `${BASE_URL}/api/drive/file/${id}/stream?token=${encodeURIComponent(token)}`;
+    res.json({ token, streamUrl, filename: file.filename || file.file_name || 'document' });
+  } catch (err) {
+    const s = err.response?.status;
+    if (s === 404) return res.status(404).json({ error: 'Fichier introuvable.' });
+    if (s === 403) return res.status(403).json({ error: 'Accès refusé.' });
+    next(err);
+  }
+};
+
+// ── GET /api/drive/file/:id/stream?token=XXX ────────────────────────────────
+// Streams the file using the signed token (no Authorization header needed).
+// This URL can be passed to Google Docs Viewer.
+exports.fileStream = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { token } = req.query;
+    if (!token) return res.status(401).json({ error: 'Token manquant.' });
+
+    let payload;
+    try {
+      payload = jwt.verify(token, FILE_TOKEN_SECRET);
+    } catch (_) {
+      return res.status(401).json({ error: 'Token invalide ou expiré.' });
+    }
+
+    if (payload.fileId !== id) return res.status(401).json({ error: 'Token invalide.' });
+
+    // Stream the file using the embedded humhub token
+    const upstream = await http.get(`/emajlis/drive/file/${id}/download`, {
+      ...asUser(payload.humhubToken),
+      params: { inline: 1 },
+      responseType: 'stream',
+    });
+
+    // Allow Google Docs Viewer to fetch this resource (CORS)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'private, max-age=600');
+
+    for (const h of ['content-type', 'content-length', 'content-disposition']) {
+      if (upstream.headers[h]) res.setHeader(h, upstream.headers[h]);
+    }
+
+    // Force inline so browser/WebView displays instead of downloading
+    const fn = (upstream.headers['content-disposition'] || '')
+      .match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)?.[1]?.replace(/['"]/g, '') || 'document';
+    res.setHeader('Content-Disposition', `inline; filename="${fn}"`);
+
+    upstream.data.on('error', (err) => {
+      if (!res.headersSent) res.status(502).json({ error: 'Flux interrompu.' });
+      else res.destroy(err);
+    });
+    upstream.data.pipe(res);
+  } catch (err) {
+    const s = err.response?.status;
+    if (s === 401) return res.status(401).json({ error: 'Session expirée.' });
+    if (s === 403) return res.status(403).json({ error: 'Accès refusé.' });
+    if (s === 404) return res.status(404).json({ error: 'Fichier introuvable.' });
+    next(err);
+  }
+};
+
+// ── GET /api/cfiles/file/:id/token ───────────────────────────────────────────
+exports.cfileToken = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const humhubToken = req.humhubToken;
+
+    const payload = { fileId: id, humhubToken, type: 'cfile' };
+    const token = jwt.sign(payload, FILE_TOKEN_SECRET, { expiresIn: '10m' });
+    const streamUrl = `${BASE_URL}/api/cfiles/file/${id}/stream?token=${encodeURIComponent(token)}`;
+    res.json({ token, streamUrl });
+  } catch (err) { next(err); }
+};
+
+// ── GET /api/cfiles/file/:id/stream?token=XXX ───────────────────────────────
+exports.cfileStream = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { token } = req.query;
+    if (!token) return res.status(401).json({ error: 'Token manquant.' });
+
+    let payload;
+    try { payload = jwt.verify(token, FILE_TOKEN_SECRET); }
+    catch (_) { return res.status(401).json({ error: 'Token invalide ou expiré.' }); }
+
+    if (payload.fileId !== id) return res.status(401).json({ error: 'Token invalide.' });
+
+    const attempts = [
+      () => http.get(`/emajlis/drive/file/${id}/download`, { ...asUser(payload.humhubToken), params: { inline: 1 }, responseType: 'stream' }),
+      () => http.get('/file/download', { ...asUser(payload.humhubToken), params: { id, inline: 1 }, responseType: 'stream' }),
+      () => http.get(`/emajlis/cfiles/file/${id}/download`, { ...asUser(payload.humhubToken), params: { inline: 1 }, responseType: 'stream' }),
+    ];
+    let upstream = null, lastErr = null;
+    for (const attempt of attempts) {
+      try { upstream = await attempt(); break; }
+      catch (e) { lastErr = e; if (e.response?.status === 401 || e.response?.status === 403) break; }
+    }
+    if (!upstream) {
+      const s = lastErr?.response?.status;
+      if (s === 401) return res.status(401).json({ error: 'Session expirée.' });
+      if (s === 403) return res.status(403).json({ error: 'Accès refusé.' });
+      return res.status(404).json({ error: 'Fichier introuvable.' });
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'private, max-age=600');
+    for (const h of ['content-type', 'content-length', 'content-disposition']) {
+      if (upstream.headers[h]) res.setHeader(h, upstream.headers[h]);
+    }
+    const fn = (upstream.headers['content-disposition'] || '')
+      .match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)?.[1]?.replace(/['"]/g, '') || 'document';
+    res.setHeader('Content-Disposition', `inline; filename="${fn}"`);
+
+    upstream.data.on('error', (err) => {
+      if (!res.headersSent) res.status(502).json({ error: 'Flux interrompu.' });
+      else res.destroy(err);
+    });
+    upstream.data.pipe(res);
+  } catch (err) { next(err); }
 };

@@ -88,36 +88,20 @@ async function fetchArticleFromWp(createdAt, objectId) {
   // Strategy 1: match by date (fast, works when WP publish date = HumHub import date)
   if (createdAt) {
     const posts = await fetchWpPostsByDate(createdAt);
-    if (posts.length) {
-      // Use objectId modulo to pick a consistent post when multiple exist same day
+    if (posts.length === 1) {
+      // Only 1 post that day — safe to use it
+      return wpPostToPreview(posts[0], objectId);
+    }
+    if (posts.length > 1) {
+      // Multiple posts same day — use objectId modulo to pick consistently
       const idx = objectId ? (Number(objectId) % posts.length) : 0;
       return wpPostToPreview(posts[idx] || posts[0], objectId);
     }
   }
 
-  // Strategy 2: fetch recent 20 WP posts, pick the one whose WP publish order
-  // matches the HumHub objectId order (both are created in the same sequence)
-  const recent = await fetchWpRecentPosts(20);
-  if (!recent.length) return null;
-
-  // Try to find a WP post published within 30 days of the HumHub import date
-  if (createdAt) {
-    const humhubDate = new Date(createdAt);
-    const windowMs = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const close = recent.filter(p => {
-      const wpDate = new Date(p.date || 0);
-      return Math.abs(wpDate - humhubDate) < windowMs;
-    });
-    if (close.length) {
-      const idx = objectId ? (Number(objectId) % close.length) : 0;
-      console.log(`[WP] Fallback: matched by 30-day window, WP ID ${close[idx]?.id}`);
-      return wpPostToPreview(close[idx] || close[0], objectId);
-    }
-  }
-
-  // Last resort: most recent WP post
-  console.log(`[WP] Last resort: using most recent WP post for objectId=${objectId}`);
-  return wpPostToPreview(recent[0], objectId);
+  // No date match and no safe fallback — return null rather than wrong content
+  // The app will show the excerpt from the feed instead
+  return null;
 }
 
 // ── Type normalisation ────────────────────────────────────────────────────────
