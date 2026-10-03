@@ -42,23 +42,26 @@ async function fetchWpArticle(createdAt, objectId, metaUrl) {
       }
     }
 
-    // Strategy 2: exact date match — ONLY return if exactly 1 post that day
-    // Multiple posts same day = ambiguous, cannot reliably match = return null
+    // Strategy 2: exact date match
     if (createdAt) {
       const day    = createdAt.slice(0, 10);
       const after  = `${day}T00:00:00`;
       const before = `${day}T23:59:59`;
       const { data } = await axios.get(`${WP_API}/posts`, {
-        params: { per_page: 5, after, before, _embed: 'wp:featuredmedia', orderby: 'date', order: 'desc' },
+        params: { per_page: 10, after, before, _embed: 'wp:featuredmedia', orderby: 'date', order: 'asc' },
         timeout: 10000,
       });
       const posts = Array.isArray(data) ? data : [];
-      // Only use date match if there is EXACTLY 1 post that day
       if (posts.length === 1) return buildWpPreview(posts[0]);
-      // Multiple posts same day: cannot reliably match → return null
+      if (posts.length > 1) {
+        // Same strategy as enrich.js: sort by WP ID asc, pick by objectId modulo
+        const sorted = [...posts].sort((a, b) => a.id - b.id);
+        const idx = objectId ? (Number(objectId) % sorted.length) : 0;
+        return buildWpPreview(sorted[idx] || sorted[0]);
+      }
     }
 
-    // No reliable match found → return null (app shows feed excerpt instead)
+    // No reliable match found → return null
     return null;
   } catch (_) { return null; }
 }
@@ -227,7 +230,10 @@ exports.show = async (req, res, next) => {
   const token = req.humhubToken;
 
   try {
-    const { data } = await http.get(`/content/${req.params.id}`, asUser(token));
+    const { data } = await http.get(`/content/${req.params.id}`, {
+      ...asUser(token),
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+    });
     const meta      = data.metadata || {};
     const type      = normalizeType(meta.object_model || '');
     const createdAt = meta.created_at || null;
@@ -235,6 +241,7 @@ exports.show = async (req, res, next) => {
 
     const loaded = await loadBody(type, meta.object_id, token, createdAt, metaUrl);
 
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
       id:          data.id,
       objectModel: meta.object_model || '',
