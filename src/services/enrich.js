@@ -398,8 +398,8 @@ async function enrichItems(rawItems, token) {
     const raw = sources[index];
 
     // Server already provides preview (BG-01 deployed) — skip WP fetch.
-    // EXCEPT for 'article' type: HumHub sends a generic placeholder title,
-    // we always override with real WordPress data.
+    // EXCEPT for 'article' type when WP can match: we try WP first for rich content.
+    // If WP match fails, we fall back to HumHub's preview title.
     if (raw?.preview?.title && item.type !== 'article') {
       Object.assign(item, {
         title:    raw.preview.title,
@@ -407,6 +407,27 @@ async function enrichItems(rawItems, token) {
         imageUrl: raw.preview.image_url || null,
         extra:    raw.preview,
       });
+      return;
+    }
+
+    // For articles: use HumHub preview title directly (it contains the real title
+    // from MajlissPost/ImportArticle). Only try WP if we need the full body image/excerpt.
+    if (item.type === 'article' && raw?.preview?.title) {
+      // Use HumHub title as base, then try to enrich with WP image/excerpt
+      item.title = raw.preview.title;
+      item.excerpt = raw.preview.excerpt || '';
+      item.imageUrl = raw.preview.image_url || null;
+      item.extra = raw.preview;
+      // Still try WP for better image/excerpt, but don't override title if WP fails
+      if (item.objectId == null) return;
+      const wpPreview = await fetchArticleFromWp(raw.metadata?.created_at || null, item.objectId);
+      if (wpPreview) {
+        item.title = wpPreview.title || item.title;
+        item.excerpt = wpPreview.excerpt || item.excerpt;
+        item.imageUrl = wpPreview.imageUrl || item.imageUrl;
+        item.externalUrl = wpPreview.externalUrl || null;
+        item.extra = wpPreview.extra || item.extra;
+      }
       return;
     }
 
