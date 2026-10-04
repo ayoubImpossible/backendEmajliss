@@ -106,36 +106,7 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
     }
 
     case 'article': {
-      // MajlissPost (externalHtmlStream): fetch full HTML from HumHub REST API
-      if (meta.object_model && meta.object_model.includes('externalHtmlStream')) {
-        const endpoints = [
-          `/external-html-stream/majliss-post/view?id=${meta.object_id}`,
-          `/emajlis/external-html-stream/majliss-post/${meta.object_id}`,
-          `/external-html-stream/majliss-post/${meta.object_id}`,
-        ];
-        for (const endpoint of endpoints) {
-          try {
-            const m = await tryGet(endpoint, token);
-            if (m) {
-              console.log(`[MajlissPost] ${endpoint}:`, JSON.stringify(m).slice(0, 300));
-              const post = m?.majlissPost || m?.post || m;
-              const body = post?.content || post?.body || post?.html || post?.message || '';
-              if (body) {
-                return {
-                  title:      post.title || post.name || '',
-                  body,
-                  bodyFormat: 'html',
-                  imageUrl:   post.preview_image || post.image_url || null,
-                  extra:      {},
-                };
-              }
-            }
-          } catch (err) {
-            console.log(`[MajlissPost] ${endpoint} failed: ${err?.message}`);
-          }
-        }
-      }
-      // ImportArticle or MajlissPost fallback — fetch from WordPress
+      // MajlissPost / ImportArticle — fetch from WordPress using date + objectId matching.
       return fetchWpArticle(createdAt, objectId, metaUrl);
     }
 
