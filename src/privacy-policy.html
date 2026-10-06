@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Politique de Confidentialité – eMajlis CSEFRS</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #1a1a2e;
+      background: #f9fafb;
+      line-height: 1.7;
+      padding: 0 16px 60px;
+    }
+    header {
+      background: #7b1c2e;
+      color: #fff;
+      padding: 32px 24px 24px;
+      margin: 0 -16px 32px;
+    }
+    header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    header p  { font-size: 13px; opacity: 0.85; }
+    h2 {
+      font-size: 16px; font-weight: 700;
+      color: #7b1c2e;
+      margin: 28px 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #f0e6e9;
+    }
+    p, li { font-size: 14px; color: #333; margin-bottom: 8px; }
+    ul { padding-left: 20px; margin-bottom: 8px; }
+    a  { color: #7b1c2e; }
+    .last-updated {
+      font-size: 12px; color: #888;
+      margin-top: 40px; text-align: center;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>Politique de Confidentialité</h1>
+      <p>Application mobile eMajlis – Conseil Supérieur de l'Éducation, de la Formation et de la Recherche Scientifique (CSEFRS)</p>
+    </div>
+  </header>
+
+  <div class="container">
+
+    <h2>1. Introduction</h2>
+    <p>
+      La présente Politique de Confidentialité décrit la manière dont l'application mobile <strong>eMajlis</strong>,
+      développée par le Conseil Supérieur de l'Éducation, de la Formation et de la Recherche Scientifique (CSEFRS),
+      collecte, utilise, stocke et protège les données personnelles de ses utilisateurs.
+    </p>
+    <p>
+      En utilisant l'application, vous acceptez les pratiques décrites dans cette politique.
+    </p>
+
+    <h2>2. Données collectées</h2>
+    <p>L'application collecte les types de données suivants :</p>
+    <ul>
+      <li><strong>Données d'authentification :</strong> identifiant et mot de passe utilisés pour se connecter à la plateforme HumHub du CSEFRS. Ces données ne sont pas stockées localement de manière permanente — elles servent uniquement à obtenir un jeton d'accès sécurisé.</li>
+      <li><strong>Jeton d'accès :</strong> un jeton JWT est stocké de manière sécurisée sur l'appareil (via Expo SecureStore) afin de maintenir la session active.</li>
+      <li><strong>Données de profil :</strong> nom, prénom, adresse e-mail professionnelle et photo de profil, tels que définis sur la plateforme CSEFRS.</li>
+      <li><strong>Données de navigation :</strong> contenus consultés (actualités, documents, événements) dans le cadre de l'utilisation normale de l'application.</li>
+      <li><strong>Fichiers temporaires :</strong> les documents et images téléchargés sont mis en cache temporairement sur l'appareil pour améliorer les performances. Ces fichiers sont automatiquement supprimés par le système.</li>
+    </ul>
+
+    <h2>3. Finalités du traitement</h2>
+    <p>Les données collectées sont utilisées exclusivement pour :</p>
+    <ul>
+      <li>Authentifier les membres du CSEFRS et leur donner accès à la plateforme interne eMajlis ;</li>
+      <li>Afficher les contenus, actualités, documents et événements de la plateforme ;</li>
+      <li>Permettre les interactions sociales internes (commentaires, réactions, notifications) ;</li>
+      <li>Assurer le bon fonctionnement et la sécurité de l'application.</li>
+    </ul>
+
+    <h2>4. Partage des données</h2>
+    <p>
+      Les données personnelles des utilisateurs <strong>ne sont pas vendues, louées ni partagées</strong> avec des tiers à des fins commerciales.
+    </p>
+    <p>Les données peuvent être transmises aux services suivants dans le cadre du fonctionnement de l'application :</p>
+    <ul>
+      <li><strong>HumHub (plateforme interne CSEFRS) :</strong> serveur intranet hébergé par le CSEFRS. Toutes les données restent dans l'infrastructure du CSEFRS.</li>
+      <li><strong>Railway.app :</strong> hébergement du serveur API backend de l'application. Utilisé uniquement comme intermédiaire sécurisé entre l'application et la plateforme HumHub.</li>
+      <li><strong>Google Docs Viewer :</strong> utilisé pour afficher les documents (PDF, DOCX, PPTX) à l'intérieur de l'application. L'URL signée du document est transmise à Google pour rendu. Aucune donnée personnelle n'est transmise.</li>
+      <li><strong>Firebase Cloud Messaging :</strong> utilisé pour l'envoi de notifications push. Seul l'identifiant FCM de l'appareil est transmis.</li>
+    </ul>
+
+    <h2>5. Conservation des données</h2>
+    <p>
+      Les données sont conservées aussi longtemps que le compte de l'utilisateur est actif sur la plateforme CSEFRS.
+      Les jetons d'accès expirent automatiquement. Les fichiers en cache sont gérés par le système d'exploitation de l'appareil.
+    </p>
+
+    <h2>6. Sécurité</h2>
+    <p>
+      L'application utilise les mesures de sécurité suivantes :
+    </p>
+    <ul>
+      <li>Communication chiffrée via HTTPS/TLS pour toutes les requêtes réseau ;</li>
+      <li>Stockage sécurisé du jeton d'accès via Expo SecureStore (chiffrement natif de l'appareil) ;</li>
+      <li>Jetons signés (JWT) avec expiration pour l'accès aux ressources ;</li>
+      <li>Aucun stockage de mot de passe en clair sur l'appareil ou le serveur.</li>
+    </ul>
+
+    <h2>7. Droits des utilisateurs</h2>
+    <p>Conformément à la réglementation applicable, vous disposez des droits suivants :</p>
+    <ul>
+      <li>Droit d'accès à vos données personnelles ;</li>
+      <li>Droit de rectification des informations inexactes ;</li>
+      <li>Droit à la suppression de votre compte et de vos données ;</li>
+      <li>Droit d'opposition au traitement de vos données.</li>
+    </ul>
+    <p>Pour exercer ces droits, contactez-nous à : <a href="mailto:contact@csefrs.ma">contact@csefrs.ma</a></p>
+
+    <h2>8. Données des mineurs</h2>
+    <p>
+      L'application eMajlis est destinée exclusivement aux membres et collaborateurs du CSEFRS.
+      Elle n'est pas destinée aux mineurs et ne collecte pas sciemment de données concernant des personnes de moins de 18 ans.
+    </p>
+
+    <h2>9. Modifications de cette politique</h2>
+    <p>
+      Cette politique peut être mise à jour périodiquement. Toute modification sera notifiée via l'application.
+      La date de dernière mise à jour est indiquée ci-dessous.
+    </p>
+
+    <h2>10. Contact</h2>
+    <p>
+      Pour toute question relative à cette politique de confidentialité :<br/>
+      <strong>CSEFRS – Direction des Systèmes d'Information</strong><br/>
+      Adresse : Rabat, Maroc<br/>
+      Email : <a href="mailto:contact@csefrs.ma">contact@csefrs.ma</a><br/>
+      Site web : <a href="https://www.csefrs.ma" target="_blank">www.csefrs.ma</a>
+    </p>
+
+    <p class="last-updated">Dernière mise à jour : octobre 2026</p>
+
+  </div>
+</body>
+</html>

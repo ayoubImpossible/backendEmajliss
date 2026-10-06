@@ -94,6 +94,11 @@ app.use('/uploads', express.static(UPLOAD_DIR));
 // Root endpoint
 app.get('/', (_req, res) => res.json({ app: 'eMajlis API', version: '1.0.0', status: 'running' }));
 
+// Privacy Policy — public, no auth required
+app.get('/privacy', (_req, res) => {
+  res.sendFile(require('path').join(__dirname, 'privacy-policy.html'));
+});
+
 // Simple test endpoint
 app.get('/ping', (_req, res) => res.json({ message: 'Hello World 👋', status: 'ok', time: new Date().toISOString() }));
 
