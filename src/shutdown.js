@@ -1,9 +1,5 @@
 'use strict';
 
-/**
- * Graceful shutdown handler for the API server.
- * Closes all connections and cleans up resources on SIGTERM/SIGINT.
- */
 
 let httpServer = null;
 let httpAgent = null;
@@ -28,7 +24,6 @@ function shutdown(signal) {
       process.exit(0);
     });
     
-    // Force exit after 10s if graceful shutdown fails
     setTimeout(() => {
       console.error('Forced shutdown after timeout');
       process.exit(1);
