@@ -30,15 +30,12 @@ const { comments: commentRoutes, likes: likeRoutes } = require('./routes/social.
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Trust Railway/Vercel/Render proxy — required for express-rate-limit behind a load balancer
 app.set('trust proxy', 1);
 
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
-// On Vercel/serverless the filesystem is read-only — skip directory creation
 try {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 } catch (_) {
-  // read-only filesystem (Vercel) — uploads not supported, skip silently
 }
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
@@ -55,9 +52,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
-// CORS : sans objet pour React Native, qui n'applique pas la politique
-// d'origine. Restreint tout de mÃªme si CORS_ORIGINS est dÃ©fini, pour le jour oÃ¹
-// un client web consommera cette API.
+
 const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use(cors({
   origin: corsOrigins.length ? corsOrigins : '*',
@@ -91,7 +86,6 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-// Root endpoint
 app.get('/', (_req, res) => res.json({ app: 'eMajlis API', version: '1.0.0', status: 'running' }));
 
 // Privacy Policy — public, no auth required
@@ -100,7 +94,15 @@ app.get('/privacy', (_req, res) => {
 });
 
 // Simple test endpoint
-app.get('/ping', (_req, res) => res.json({ message: 'Hello World 👋', status: 'ok', time: new Date().toISOString() }));
+app.get('/ping', (_req, res) => res.json({ message: 'Hello World', status: 'ok', time: new Date().toISOString() }));
+
+// Emergency restart endpoint — only works if process manager (pm2/systemd) will restart the process
+const RESTART_TOKEN = process.env.RESTART_TOKEN || 'emajlis-restart-2026';
+app.get('/restart', (req, res) => {
+  if (req.query.token !== RESTART_TOKEN) return res.status(403).json({ error: 'Forbidden' });
+  res.json({ message: 'Restarting...' });
+  setTimeout(() => process.exit(0), 500);
+});
 
 app.get('/health', (_req, res) => {
   const { feedCache, contentCache, staticCache } = require('./services/advancedCache');
@@ -169,7 +171,7 @@ app.get('/api/proxy-html', requireAuth, async (req, res) => {
   }
 
   if (target.protocol !== 'https:') {
-    return res.status(400).json({ error: 'Seul le protocole HTTPS est acceptÃ©.' });
+    return res.status(400).json({ error: 'Seul le protocole HTTPS est accepté.' });
   }
   if (!ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) {
     return res.status(403).json({
