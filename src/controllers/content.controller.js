@@ -106,35 +106,7 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
     }
 
     case 'article': {
-      // MajlissPost (externalHtmlStream) — Revue de Presse: fetch HTML body from HumHub
-      if (meta.object_model && meta.object_model.includes('externalHtmlStream')) {
-        const endpoints = [
-          `/emajlis/revue-presse/majliss-post/${objectId}`,
-          `/revue-presse/majliss-post/view?id=${objectId}`,
-          `/emajlis/external-html-stream/majliss-post/${objectId}`,
-        ];
-        for (const ep of endpoints) {
-          try {
-            const m = await tryGet(ep, token);
-            if (m) {
-              console.log(`[MajlissPost] ${ep} keys:`, Object.keys(m).join(', '));
-              console.log(`[MajlissPost] ${ep} sample:`, JSON.stringify(m).slice(0, 400));
-              // Try known body field names
-              const body = m?.content || m?.body || m?.html || m?.message
-                || m?.majlissPost?.content || m?.post?.content || m?.post?.body || '';
-              const title = m?.title || m?.name || m?.subject
-                || m?.majlissPost?.title || m?.post?.title || '';
-              if (body) {
-                return { title, body, bodyFormat: 'html', imageUrl: null, extra: {} };
-              }
-            }
-          } catch (err) {
-            console.log(`[MajlissPost] ${ep} failed: ${err?.message}`);
-          }
-        }
-        console.log(`[MajlissPost] all endpoints failed for objectId=${objectId}`);
-      }
-      // ImportArticle — fetch from WordPress using date + objectId matching.
+      // ImportArticle / MajlissPost — fetch from WordPress using date + objectId matching.
       return fetchWpArticle(createdAt, objectId, metaUrl);
     }
 
