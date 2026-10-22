@@ -62,12 +62,20 @@ exports.getFeed = async (req, res, next) => {
     
     const enriched = await enrichItems(rawResults, token);
 
-    // Deduplicate articles by wpId — HumHub creates both MajlissPost + ImportArticle for the same WP article
+    // Deduplicate by id first, then by wpId
+    // HumHub creates both MajlissPost + ImportArticle for the same WP article
+    const seenIds = new Set();
     const seenWpIds = new Set();
     const results = enriched.filter((item) => {
+      // Deduplicate by HumHub content ID
+      if (item.id != null) {
+        if (seenIds.has(item.id)) return false;
+        seenIds.add(item.id);
+      }
+      // Deduplicate by WP post ID
       const wpId = item.extra?.wpId;
       if (wpId) {
-        if (seenWpIds.has(wpId)) return false; // skip duplicate
+        if (seenWpIds.has(wpId)) return false;
         seenWpIds.add(wpId);
       }
       return true;
