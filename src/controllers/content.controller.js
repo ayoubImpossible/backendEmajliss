@@ -144,12 +144,33 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
     case 'post': {
       const p = await tryGet(`/post/${objectId}`, token);
       if (!p) return null;
+      const message = p.message || '';
+
+      // Detect Revue de Presse post — contains link to MajlissPost
+      // Pattern: URL contains /external-html-stream/majliss-post/view?id=XXX
+      const majlissMatch = message.match(/https?:\/\/[^\s)]+\/external-html-stream\/majliss-post\/view\?id=(\d+)/i)
+        || message.match(/https?:\/\/[^\s)]+\/revue-presse[^\s)]*\?id=(\d+)/i);
+
+      if (majlissMatch) {
+        const majlissId = majlissMatch[1];
+        const html = await fetchMajlissPostHtml(majlissId, token);
+        if (html) {
+          return {
+            title:      titleFromText(message),
+            body:       html,
+            bodyFormat: 'html',
+            imageUrl:   imageFromText(message),
+            extra:      { isRevueDePresse: true },
+          };
+        }
+      }
+
       return {
-        title: titleFromText(p.message),
-        body: p.message || '',
+        title:      titleFromText(message),
+        body:       message,
         bodyFormat: 'markdown',
-        imageUrl: imageFromText(p.message),
-        extra: {},
+        imageUrl:   imageFromText(message),
+        extra:      {},
       };
     }
 
