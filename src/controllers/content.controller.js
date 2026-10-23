@@ -166,6 +166,15 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
             extra:      { isRevueDePresse: true },
           };
         }
+        // HTML fetch failed — signal frontend to open in WebView with auth
+        const revueUrl = majlissMatch[0];
+        return {
+          title:      titleFromText(message),
+          body:       message,
+          bodyFormat: 'markdown',
+          imageUrl:   imageFromText(message),
+          extra:      { isRevueDePresse: true, revueUrl },
+        };
       }
 
       return {
