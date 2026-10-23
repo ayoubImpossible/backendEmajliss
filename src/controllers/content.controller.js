@@ -14,44 +14,30 @@ const WP_API  = `${WP_BASE}/wp-json/wp/v2`;
  * HumHub stores the rich HTML in the web view — extract .imported-document-content
  */
 async function fetchMajlissPostHtml(majlissId, token) {
-  // Try multiple URL patterns — the ID in the Post link may be different from the objectId
+  // The MajlissPost HTML is stored in HumHub's content stream
+  // Try HumHub REST API endpoints for externalHtmlStream module
   const urlsToTry = [
-    `${HUMHUB_BASE}/external-html-stream/majliss-post/view?id=${majlissId}`,
-    `${HUMHUB_BASE}/revue-presse/majliss-post/view?id=${majlissId}`,
-    `${HUMHUB_BASE}/revue-presse/index/view?id=${majlissId}`,
+    `/external-html-stream/majliss-post/${majlissId}`,
+    `/emajlis/external-html-stream/majliss-post/${majlissId}`,
   ];
 
-  for (const url of urlsToTry) {
+  for (const endpoint of urlsToTry) {
     try {
-      console.log(`[MajlissPost] trying: ${url}`);
-      const { data } = await axios.get(url, {
-        timeout: 15000,
-        httpsAgent,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'User-Agent': 'eMajlis-Mobile/1.0',
-          'Accept': 'text/html',
-        },
-        responseType: 'text',
-        validateStatus: (s) => s >= 200 && s < 400,
-      });
-
-      if (!data || typeof data !== 'string') continue;
-      console.log(`[MajlissPost] ${url} returned ${data.length} bytes`);
-
-      // Extract .imported-document-content div
-      const match = data.match(/<div[^>]+class="[^"]*imported-document-content[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
-      if (match) return match[0];
-
-      const containerMatch = data.match(/<div[^>]+class="[^"]*document-container[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
-      if (containerMatch) return containerMatch[0];
-
-      const contentMatch = data.match(/<div[^>]+class="[^"]*revue-presse-viewer-bg[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+id="layout-footer)/i);
-      if (contentMatch) return contentMatch[1];
-
-      console.log(`[MajlissPost] ${url} returned HTML but no matching div found`);
+      console.log(`[MajlissPost] trying API: ${endpoint}`);
+      const { tryGetFast } = require('../services/humhub');
+      const result = await tryGetFast(endpoint, token);
+      if (result) {
+        console.log(`[MajlissPost] ${endpoint} returned:`, JSON.stringify(result).slice(0, 300));
+        const html = result?.content || result?.html || result?.body
+          || result?.majlissPost?.content || result?.post?.content
+          || result?.data?.content || result?.message;
+        if (html && html.length > 100) {
+          console.log(`[MajlissPost] found HTML (${html.length} bytes) at ${endpoint}`);
+          return html;
+        }
+      }
     } catch (err) {
-      console.log(`[MajlissPost] ${url} failed: ${err?.message}`);
+      console.log(`[MajlissPost] ${endpoint} failed: ${err?.response?.status || err?.message}`);
     }
   }
   return null;
@@ -187,20 +173,7 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
     }
 
     case 'article': {
-      // MajlissPost (externalHtmlStream) — Revue de Presse: fetch full HTML from HumHub web page
-      if (meta.object_model && meta.object_model.includes('externalHtmlStream')) {
-        const html = await fetchMajlissPostHtml(objectId, token);
-        if (html) {
-          return {
-            title:      '',
-            body:       html,
-            bodyFormat: 'html',
-            imageUrl:   null,
-            extra:      {},
-          };
-        }
-      }
-      // ImportArticle — fetch from WordPress using date + objectId matching.
+      // ImportArticle / MajlissPost — fetch from WordPress using date + objectId matching.
       return fetchWpArticle(createdAt, objectId, metaUrl);
     }
 
