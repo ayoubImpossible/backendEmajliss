@@ -13,46 +13,48 @@ const WP_API  = `${WP_BASE}/wp-json/wp/v2`;
  * Fetch the full HTML content of a MajlissPost from HumHub web page.
  * HumHub stores the rich HTML in the web view — extract .imported-document-content
  */
-async function fetchMajlissPostHtml(objectId, token) {
-  try {
-    const url = `${HUMHUB_BASE}/external-html-stream/majliss-post/view?id=${objectId}`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      httpsAgent,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'User-Agent': 'eMajlis-Mobile/1.0',
-        'Accept': 'text/html',
-      },
-      responseType: 'text',
-      validateStatus: (s) => s >= 200 && s < 400,
-    });
+async function fetchMajlissPostHtml(majlissId, token) {
+  // Try multiple URL patterns — the ID in the Post link may be different from the objectId
+  const urlsToTry = [
+    `${HUMHUB_BASE}/external-html-stream/majliss-post/view?id=${majlissId}`,
+    `${HUMHUB_BASE}/revue-presse/majliss-post/view?id=${majlissId}`,
+    `${HUMHUB_BASE}/revue-presse/index/view?id=${majlissId}`,
+  ];
 
-    if (!data || typeof data !== 'string') return null;
+  for (const url of urlsToTry) {
+    try {
+      console.log(`[MajlissPost] trying: ${url}`);
+      const { data } = await axios.get(url, {
+        timeout: 15000,
+        httpsAgent,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'eMajlis-Mobile/1.0',
+          'Accept': 'text/html',
+        },
+        responseType: 'text',
+        validateStatus: (s) => s >= 200 && s < 400,
+      });
 
-    // Extract .imported-document-content div
-    const match = data.match(/<div[^>]+class="[^"]*imported-document-content[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
-    if (match) {
-      return match[0]; // Return the full div with content
+      if (!data || typeof data !== 'string') continue;
+      console.log(`[MajlissPost] ${url} returned ${data.length} bytes`);
+
+      // Extract .imported-document-content div
+      const match = data.match(/<div[^>]+class="[^"]*imported-document-content[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+      if (match) return match[0];
+
+      const containerMatch = data.match(/<div[^>]+class="[^"]*document-container[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+      if (containerMatch) return containerMatch[0];
+
+      const contentMatch = data.match(/<div[^>]+class="[^"]*revue-presse-viewer-bg[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+id="layout-footer)/i);
+      if (contentMatch) return contentMatch[1];
+
+      console.log(`[MajlissPost] ${url} returned HTML but no matching div found`);
+    } catch (err) {
+      console.log(`[MajlissPost] ${url} failed: ${err?.message}`);
     }
-
-    // Fallback: extract everything inside .document-container
-    const containerMatch = data.match(/<div[^>]+class="[^"]*document-container[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
-    if (containerMatch) {
-      return containerMatch[0];
-    }
-
-    // Last fallback: extract the main content area
-    const contentMatch = data.match(/<div[^>]+class="[^"]*revue-presse-viewer-bg[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+id="layout-footer)/i);
-    if (contentMatch) {
-      return contentMatch[1];
-    }
-
-    return null;
-  } catch (err) {
-    console.log(`[MajlissPost] fetch failed for id=${objectId}: ${err?.message}`);
-    return null;
   }
+  return null;
 }
 
 /** Clean WordPress HTML to prevent srcset leakage in RenderHtml */
@@ -153,6 +155,7 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
 
       if (majlissMatch) {
         const majlissId = majlissMatch[1];
+        console.log(`[Post] detected Revue de Presse link, majlissId=${majlissId}, full match=${majlissMatch[0]}`);
         const html = await fetchMajlissPostHtml(majlissId, token);
         if (html) {
           return {
