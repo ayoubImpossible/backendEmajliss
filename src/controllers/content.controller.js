@@ -3,9 +3,57 @@
 const { http, asUser, tryGet } = require('../services/humhub');
 const { normalizeType, toPlainText, titleFromText, imageFromText } = require('../services/enrich');
 const axios = require('axios');
+const { httpsAgent } = require('../services/humhub');
 
+const HUMHUB_BASE = (process.env.HUMHUB_BASE_URL || 'https://emajlis-dev.csefrs.ma').replace(/\/+$/, '');
 const WP_BASE = (process.env.WP_BASE_URL || 'https://intranet.csefrs.ma').replace(/\/+$/, '');
 const WP_API  = `${WP_BASE}/wp-json/wp/v2`;
+
+/**
+ * Fetch the full HTML content of a MajlissPost from HumHub web page.
+ * HumHub stores the rich HTML in the web view — extract .imported-document-content
+ */
+async function fetchMajlissPostHtml(objectId, token) {
+  try {
+    const url = `${HUMHUB_BASE}/external-html-stream/majliss-post/view?id=${objectId}`;
+    const { data } = await axios.get(url, {
+      timeout: 15000,
+      httpsAgent,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'User-Agent': 'eMajlis-Mobile/1.0',
+        'Accept': 'text/html',
+      },
+      responseType: 'text',
+      validateStatus: (s) => s >= 200 && s < 400,
+    });
+
+    if (!data || typeof data !== 'string') return null;
+
+    // Extract .imported-document-content div
+    const match = data.match(/<div[^>]+class="[^"]*imported-document-content[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+    if (match) {
+      return match[0]; // Return the full div with content
+    }
+
+    // Fallback: extract everything inside .document-container
+    const containerMatch = data.match(/<div[^>]+class="[^"]*document-container[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i);
+    if (containerMatch) {
+      return containerMatch[0];
+    }
+
+    // Last fallback: extract the main content area
+    const contentMatch = data.match(/<div[^>]+class="[^"]*revue-presse-viewer-bg[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+id="layout-footer)/i);
+    if (contentMatch) {
+      return contentMatch[1];
+    }
+
+    return null;
+  } catch (err) {
+    console.log(`[MajlissPost] fetch failed for id=${objectId}: ${err?.message}`);
+    return null;
+  }
+}
 
 /** Clean WordPress HTML to prevent srcset leakage in RenderHtml */
 function cleanWpHtml(html) {
@@ -106,7 +154,20 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
     }
 
     case 'article': {
-      // ImportArticle / MajlissPost — fetch from WordPress using date + objectId matching.
+      // MajlissPost (externalHtmlStream) — Revue de Presse: fetch full HTML from HumHub web page
+      if (meta.object_model && meta.object_model.includes('externalHtmlStream')) {
+        const html = await fetchMajlissPostHtml(objectId, token);
+        if (html) {
+          return {
+            title:      '',
+            body:       html,
+            bodyFormat: 'html',
+            imageUrl:   null,
+            extra:      {},
+          };
+        }
+      }
+      // ImportArticle — fetch from WordPress using date + objectId matching.
       return fetchWpArticle(createdAt, objectId, metaUrl);
     }
 
