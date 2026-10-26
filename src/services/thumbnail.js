@@ -86,17 +86,25 @@ async function renderPdfLocal(pdfBuffer) {
   try {
     // pdf-to-img uses ESM top-level await — must use dynamic import(), not require()
     const { pdf } = await import('pdf-to-img');
-    const doc = await pdf(pdfBuffer, { scale: 2 });
-    // Get first page
-    for await (const page of doc) {
-      // page is a Buffer (PNG)
-      if (page && page.length > 5000) {
-        console.log(`[thumbnail/pdf-to-img] rendered ${page.length} bytes`);
-        return page; // Return PNG directly — browser/RN handles it fine
+
+    // Wrap in a 20s timeout — corrupt PDFs can hang indefinitely
+    const renderPromise = (async () => {
+      const doc = await pdf(pdfBuffer, { scale: 1.5 });
+      for await (const page of doc) {
+        if (page && page.length > 5000) {
+          console.log(`[thumbnail/pdf-to-img] rendered ${page.length} bytes`);
+          return page;
+        }
+        break; // only first page
       }
-      break; // only first page
-    }
-    return null;
+      return null;
+    })();
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('render timeout 20s')), 20000)
+    );
+
+    return await Promise.race([renderPromise, timeoutPromise]);
   } catch (err) {
     console.warn(`[thumbnail/pdf-to-img] ${err.message}`);
     return null;
