@@ -216,15 +216,28 @@ function extractFirstJpegFromPdf(pdfBuffer) {
 
 // ── Core generator ─────────────────────────────────────────────────────────────
 async function _doGenerate(fileId, token, ext, filename, downloadPath) {
-  // Download the file
+  // Download the file — for PDFs use Range header to get only first 3MB
+  // This is enough for pdfjs to render page 1 even for large files
   let fileBuffer = null;
+  const MAX_BYTES = 3 * 1024 * 1024; // 3MB — enough for first page
   const endpoints = downloadPath && downloadPath.includes('/cfiles/')
     ? [`/emajlis/drive/file/${fileId}/download`, `/file/download?id=${fileId}`, `/emajlis/cfiles/file/${fileId}/download`]
     : [downloadPath || `/emajlis/drive/file/${fileId}/download`];
 
   for (const ep of endpoints) {
     try {
-      const r = await http.get(ep, { ...asUser(token), responseType: 'arraybuffer', timeout: 30000 });
+      const r = await http.get(ep, {
+        ...asUser(token),
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        headers: {
+          ...(asUser(token).headers || {}),
+          // Request only first 3MB — enough for pdfjs to render page 1
+          'Range': `bytes=0-${MAX_BYTES - 1}`,
+        },
+        // Accept both 200 (full) and 206 (partial) responses
+        validateStatus: (s) => s === 200 || s === 206,
+      });
       fileBuffer = Buffer.from(r.data);
       console.log(`[thumb:${fileId}] downloaded ${fileBuffer.length} bytes from ${ep}`);
       break;
