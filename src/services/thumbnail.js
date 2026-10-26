@@ -237,13 +237,8 @@ async function _doGenerate(fileId, token, ext, filename, downloadPath) {
   if (!fileBuffer || fileBuffer.length === 0) return null;
 
   // Only generate real thumbnails for PDFs via pdfjs.
-  // For other file types, generate a styled cover with the file extension.
+  // For all other file types, return null — no fake colored covers.
   if (ext !== 'pdf') {
-    const cover = renderCover(ext, filename);
-    if (cover) {
-      console.log(`[thumb:${fileId}] ✓ cover render OK for .${ext} (${cover.length} bytes)`);
-      return cover;
-    }
     return null;
   }
 
