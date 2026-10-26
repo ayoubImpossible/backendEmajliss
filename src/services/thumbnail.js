@@ -111,7 +111,49 @@ async function renderPdfLocal(pdfBuffer) {
   }
 }
 
-// ── PDF via @sparticuz/chromium + puppeteer-core (Vercel) ────────────────────
+// ── PDF via Ghostscript (fallback for Arabic/complex PDFs) ───────────────────
+// Uses gs command to convert first page to JPEG — handles all PDF types
+async function renderPdfGhostscript(pdfBuffer) {
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const execFileAsync = promisify(execFile);
+  const os = require('os');
+
+  const tmpPdf = path.join(os.tmpdir(), `thumb_in_${Date.now()}.pdf`);
+  const tmpJpg = path.join(os.tmpdir(), `thumb_out_${Date.now()}.jpg`);
+
+  try {
+    fs.writeFileSync(tmpPdf, pdfBuffer);
+
+    await execFileAsync('gs', [
+      '-dNOPAUSE', '-dBATCH', '-dSAFER',
+      '-sDEVICE=jpeg',
+      '-dJPEGQ=82',
+      '-r120',           // 120 DPI — good quality, reasonable size
+      '-dFirstPage=1',
+      '-dLastPage=1',    // first page only
+      '-dFitPage',
+      '-dPDFFitPage',
+      `-sOutputFile=${tmpJpg}`,
+      tmpPdf,
+    ], { timeout: 20000 });
+
+    if (fs.existsSync(tmpJpg)) {
+      const buf = fs.readFileSync(tmpJpg);
+      if (buf.length > 5000) {
+        console.log(`[thumbnail/ghostscript] rendered ${buf.length} bytes`);
+        return buf;
+      }
+    }
+    return null;
+  } catch (err) {
+    console.warn(`[thumbnail/ghostscript] ${err.message}`);
+    return null;
+  } finally {
+    try { fs.unlinkSync(tmpPdf); } catch (_) {}
+    try { fs.unlinkSync(tmpJpg); } catch (_) {}
+  }
+}
 async function renderPdfChromium(pdfBuffer) {
   let browser = null;
   try {
@@ -257,21 +299,28 @@ async function _doGenerate(fileId, token, ext, filename, downloadPath) {
 
   if (!fileBuffer || fileBuffer.length === 0) return null;
 
-  // Only generate real thumbnails for PDFs via pdfjs.
+  // Only generate real thumbnails for PDFs via pdfjs or Ghostscript.
   // For all other file types, return null — no fake colored covers.
   if (ext !== 'pdf') {
     return null;
   }
 
-  // Try pdfjs + canvas first
+  // Try pdfjs + canvas first (fast, no extra process)
   const local = await renderPdfLocal(fileBuffer);
   if (local) {
     console.log(`[thumb:${fileId}] ✓ pdfjs render OK (${local.length} bytes)`);
     return local;
   }
 
-  // pdfjs produced blank canvas (napi-rs/canvas missing features) — skip chromium
-  // Instead use a simple approach: extract embedded JPEG from PDF if present
+  // pdfjs failed (Arabic fonts, corrupt PDF etc) — try Ghostscript
+  // Ghostscript handles ALL PDF types including complex Arabic fonts
+  const gs = await renderPdfGhostscript(fileBuffer);
+  if (gs) {
+    console.log(`[thumb:${fileId}] ✓ ghostscript render OK (${gs.length} bytes)`);
+    return gs;
+  }
+
+  // Last resort: extract embedded JPEG from PDF binary
   const embedded = extractFirstJpegFromPdf(fileBuffer);
   if (embedded) {
     console.log(`[thumb:${fileId}] ✓ embedded JPEG extracted (${embedded.length} bytes)`);
