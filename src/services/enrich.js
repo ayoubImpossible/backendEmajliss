@@ -250,7 +250,7 @@ async function fetchPreview(type, objectId, token) {
           humanSize:     f.human_size || humanSize(f.size),
           folderId:      f.folder_id,
           downloadPath:  `/drive/file/${objectId}/download`,
-          thumbnailPath: `/api/drive/file/${objectId}/thumbnail?v=2`,
+          thumbnailPath: `/api/drive/file/${objectId}/thumbnail?v=3`,
         },
       };
     }
@@ -282,7 +282,7 @@ async function fetchPreview(type, objectId, token) {
           humanSize:    humanSize(file.size),
           filename:     file.file_name || file.name,
           downloadPath: `/cfiles/file/${fileId}/download`,
-          thumbnailPath: `/api/cfiles/file/${fileId}/thumbnail?v=2`,
+          thumbnailPath: `/api/cfiles/file/${fileId}/thumbnail?v=3`,
         },
       };
     }
@@ -448,12 +448,12 @@ async function enrichItems(rawItems, token) {
           size:          f.size,
           humanSize:     humanSize(f.size),
           downloadPath:  `/cfiles/file/${f.id}/download`,
-          thumbnailPath: `/api/cfiles/file/${f.id}/thumbnail?v=2`,
+          thumbnailPath: `/api/cfiles/file/${f.id}/thumbnail?v=3`,
         };
       } else {
         item.extra = {
           downloadPath:  `/cfiles/file/${item.objectId}/download`,
-          thumbnailPath: `/api/cfiles/file/${item.objectId}/thumbnail?v=2`,
+          thumbnailPath: `/api/cfiles/file/${item.objectId}/thumbnail?v=3`,
         };
       }
       return;
@@ -574,5 +574,6 @@ module.exports = {
   humanSize,
   previewCache,
 };
+
 
 
