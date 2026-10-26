@@ -191,8 +191,10 @@ exports.thumbnail = async (req, res, next) => {
 // ── GET/HEAD /api/cfiles/file/:id/thumbnail ─────────────────────────────────
 exports.thumbnailCfile = async (req, res, next) => {
   const { id } = req.params;
+  // _id query param contains the real cfile file ID (different from content objectId)
+  const realFileId = req.query._id || id;
   const { thumbCache } = require('../services/thumbnail');
-  const cacheKey = `thumb:cfile:${id}`;
+  const cacheKey = `thumb:cfile:${realFileId}`;
 
   const cached = thumbCache.get(cacheKey);
   if (cached) {
@@ -208,14 +210,14 @@ exports.thumbnailCfile = async (req, res, next) => {
   try {
     let filename = '';
     try {
-      const meta = await http.get(`/cfiles/file/${id}`, { ...asUser(req.humhubToken), timeout: 8000 });
+      const meta = await http.get(`/cfiles/file/${realFileId}`, { ...asUser(req.humhubToken), timeout: 8000 });
       const f = meta.data?.file || meta.data;
       filename = f?.file_name || f?.name || f?.title || '';
     } catch (_) {}
     const ext = (filename || '').split('.').pop().toLowerCase();
     const supported = ['pdf','doc','docx','ppt','pptx','xls','xlsx','odt','odp','ods'];
     if (filename && !supported.includes(ext)) return;
-    _startBackgroundGeneration(id, req.humhubToken, cacheKey, filename, `/cfiles/file/${id}/download`);
+    _startBackgroundGeneration(realFileId, req.humhubToken, cacheKey, filename, `/cfiles/file/${realFileId}/download`);
   } catch (_) {}
 };
 
