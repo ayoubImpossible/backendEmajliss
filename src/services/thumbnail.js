@@ -274,6 +274,31 @@ async function _doGenerate(fileId, token, ext, filename, downloadPath) {
   return null;
 }
 
+// ── Concurrency limit — only 1 thumbnail at a time to avoid OOM ──────────────
+let _activeCount = 0;
+const _pendingQueue = [];
+
+function _withConcurrencyLimit(fn) {
+  return new Promise((resolve) => {
+    const run = () => {
+      _activeCount++;
+      Promise.resolve(fn()).then((result) => {
+        _activeCount--;
+        resolve(result);
+        if (_pendingQueue.length > 0) {
+          const next = _pendingQueue.shift();
+          next();
+        }
+      });
+    };
+    if (_activeCount < 1) {
+      run();
+    } else {
+      _pendingQueue.push(run);
+    }
+  });
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 async function generateThumbnail(fileId, token, cacheKey, filename, downloadPath) {
   const hit = thumbCache.get(cacheKey);
@@ -290,7 +315,7 @@ async function generateThumbnail(fileId, token, cacheKey, filename, downloadPath
   filename  = filename || String(fileId);
   const ext = filename.split('.').pop().toLowerCase();
 
-  const promise = Promise.race([
+  const promise = _withConcurrencyLimit(() => Promise.race([
     _doGenerate(fileId, token, ext, filename, downloadPath),
     new Promise(resolve => setTimeout(() => { console.warn(`[thumb:${fileId}] 50s timeout`); resolve(null); }, 50000)),
   ]).then(result => {
@@ -304,7 +329,7 @@ async function generateThumbnail(fileId, token, cacheKey, filename, downloadPath
     _inflight.delete(cacheKey);
     console.warn(`[thumb:${fileId}] unexpected error: ${err.message}`);
     return null;
-  });
+  }));
 
   _inflight.set(cacheKey, promise);
   return promise;
