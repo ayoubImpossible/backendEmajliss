@@ -1,5 +1,4 @@
-﻿'use strict';
-
+'use strict';
 
 require('dotenv').config();
 
@@ -10,41 +9,26 @@ const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const fs = require('fs');
+const axios = require('axios');
 
 const { errorHandler } = require('./middleware/errorHandler');
-const { logNotificationRequests } = require('./middleware/logger');
-const { requireAuth } = require('./middleware/humhubAuth');
-const { BASE: HUMHUB_BASE, INSECURE, tlsStatus, httpsAgent } = require('./services/humhub');
-
-const authRoutes = require('./routes/auth.routes');
-const membresRoutes = require('./routes/membres.routes');
-const calendarRoutes = require('./routes/calendar.routes');
-const eservicesRoutes = require('./routes/eservices.routes');
-const feedRoutes = require('./routes/feed.routes');
-const contentRoutes = require('./routes/content.routes');
-const driveRoutes = require('./routes/drive.routes');
-const spaceRoutes = require('./routes/space.routes');
-const { comments: commentRoutes, likes: likeRoutes } = require('./routes/social.routes');
+const { requireAuth, userCache, managerCache } = require('./middleware/humhubAuth');
+const { BASE: HUMHUB_BASE, httpsAgent } = require('./services/humhub');
+const { previewCache } = require('./services/enrich');
+const { registerServer, setupShutdownHandlers } = require('./shutdown');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
+// Railway / proxy : req.ip est l'adresse réelle du client (X-Forwarded-For
+// interprété par Express, pas lu à la main — un client ne peut pas le falsifier).
 app.set('trust proxy', 1);
-
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
-try {
-  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-} catch (_) {
-}
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(compression());
 
-// Periodic cache cleanup - evicts expired entries every 10 minutes
-const { previewCache } = require('./services/enrich');
-const { userCache, managerCache } = require('./middleware/humhubAuth');
-
+// Nettoyage périodique des caches en mémoire.
 setInterval(() => {
   const { likesCache } = require('./controllers/social.controller');
   for (const cache of [previewCache, userCache, managerCache, likesCache]) {
@@ -52,12 +36,13 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
-
+// CORS : l'application mobile n'en a pas besoin. Seules les origines
+// déclarées dans CORS_ORIGINS (site web éventuel) sont autorisées.
 const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
 app.use(cors({
-  origin: corsOrigins.length ? corsOrigins : '*',
+  origin: corsOrigins.length ? corsOrigins : false,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
 }));
 
 app.use(rateLimit({
@@ -65,165 +50,102 @@ app.use(rateLimit({
   max: Number(process.env.RATE_LIMIT_MAX) || 5000,
   standardHeaders: true,
   legacyHeaders: false,
-  // Use X-Forwarded-For to identify real clients behind Railway/Vercel proxy
-  keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
 }));
 
-// Limite plus stricte sur la connexion : protÃ¨ge aussi le formulaire web.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 50,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Trop de tentatives de connexion. Réessayez dans quelques minutes.' },
-  keyGenerator: (req) => req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip,
 });
 
-app.use(logNotificationRequests);
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-app.use('/uploads', express.static(UPLOAD_DIR));
+// Journal des requêtes : les tickets de fichiers ne sont pas journalisés.
+morgan.token('safe-url', (req) => req.originalUrl.replace(/(\/api\/files\/view\/)[^?/]+/, '$1…'));
+app.use(morgan(IS_PROD
+  ? ':remote-addr ":method :safe-url" :status :res[content-length] - :response-time ms'
+  : ':method :safe-url :status :response-time ms'));
 
-app.get('/', (_req, res) => res.json({ app: 'eMajlis API', version: '1.0.0', status: 'running' }));
+app.get('/', (_req, res) => res.json({ app: 'eMajlis API', status: 'running' }));
 
-// Privacy Policy — public, no auth required
-app.get('/privacy', (_req, res) => {
-  res.sendFile(require('path').join(__dirname, 'privacy-policy.html'));
-});
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'privacy-policy.html')));
 
-// Simple test endpoint
-app.get('/ping', (_req, res) => res.json({ message: 'Hello World', status: 'ok', time: new Date().toISOString() }));
+app.get('/ping', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
-// Emergency restart endpoint — only works if process manager (pm2/systemd) will restart the process
-const RESTART_TOKEN = process.env.RESTART_TOKEN || 'emajlis-restart-2026';
-app.get('/restart', (req, res) => {
-  if (req.query.token !== RESTART_TOKEN) return res.status(403).json({ error: 'Forbidden' });
-  res.json({ message: 'Restarting...' });
-  setTimeout(() => process.exit(0), 500);
-});
-
-app.get('/health', (_req, res) => {
-  const { feedCache, contentCache, staticCache } = require('./services/advancedCache');
-  const { userCache, managerCache } = require('./middleware/humhubAuth');
-  const { previewCache } = require('./services/enrich');
-  
-  res.json({
-    status: 'ok',
-    app: 'eMajlis API',
-    humhub: HUMHUB_BASE,
-    tls: tlsStatus(),
-    time: new Date().toISOString(),
-    caches: {
-      feed: feedCache.getStats(),
-      content: contentCache.getStats(),
-      static: staticCache.getStats(),
-      user: { size: userCache.size },
-      manager: { size: managerCache.size },
-      preview: { size: previewCache.size },
-    },
-    memory: {
-      rss: `${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`,
-      heapUsed: `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`,
-      heapTotal: `${(process.memoryUsage().heapTotal / 1024 / 1024).toFixed(2)} MB`,
-    },
-  });
-});
+// Santé : rien d'interne (adresse HumHub, mémoire) n'est exposé publiquement.
+app.get('/health', (_req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
 app.use('/api/auth/login', authLimiter);
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', require('./routes/auth.routes'));
 
-// Nouvelles routes â€” relais fidÃ¨les vers HumHub
-app.use('/api/feed', feedRoutes);
-app.use('/api/content', contentRoutes);
-app.use('/api/drive', driveRoutes);
-const { requireAuth: requireAuthMiddleware } = require('./middleware/humhubAuth');
+app.use('/api/feed', require('./routes/feed.routes'));
+app.use('/api/content', require('./routes/content.routes'));
+app.use('/api/drive', require('./routes/drive.routes'));
+app.use('/api/files', require('./routes/files.routes'));
+app.use('/api/push', require('./routes/push.routes'));
+
+// Miniatures de tous les fichiers (Drive et cfiles).
+const thumbs = require('./controllers/thumbs.controller');
+app.get('/api/thumbs/:source/:id', requireAuth, thumbs.thumb);
+app.head('/api/thumbs/:source/:id', requireAuth, thumbs.thumb);
+
+// cfiles : téléchargement, et ancienne adresse de miniature.
 const driveCtrl = require('./controllers/drive.controller');
-app.get('/api/cfiles/file/:id/download', requireAuthMiddleware, driveCtrl.downloadCfile);
-app.get('/api/cfiles/file/:id/thumbnail', requireAuthMiddleware, driveCtrl.thumbnailCfile);
-app.head('/api/cfiles/file/:id/thumbnail', requireAuthMiddleware, driveCtrl.thumbnailCfile);
-app.get('/api/cfiles/file/:id/token', requireAuthMiddleware, driveCtrl.cfileToken);
-app.get('/api/cfiles/file/:id/stream', driveCtrl.cfileStream); // no auth — uses signed token
-app.use('/api/spaces', spaceRoutes);
+app.get('/api/cfiles/file/:id/download', requireAuth, driveCtrl.downloadCfile);
+app.get('/api/cfiles/file/:id/thumbnail', requireAuth, thumbs.legacyCfile);
+app.head('/api/cfiles/file/:id/thumbnail', requireAuth, thumbs.legacyCfile);
+
+app.use('/api/spaces', require('./routes/space.routes'));
+const { comments: commentRoutes, likes: likeRoutes } = require('./routes/social.routes');
 app.use('/api/comments', commentRoutes);
 app.use('/api/likes', likeRoutes);
-app.use('/api/eservices', eservicesRoutes);
+app.use('/api/eservices', require('./routes/eservices.routes'));
+app.use('/api/membres', require('./routes/membres.routes'));
+app.use('/api/calendar', require('./routes/calendar.routes'));
 
-
-app.use('/api/membres', membresRoutes);
-app.use('/api/calendar', calendarRoutes);
-
-
-const axios = require('axios');
+// Proxy HTML restreint aux domaines du Conseil.
 const DEFAULT_HOSTS = ['emajlis-info.csefrs.ma', 'emajlis-dev.csefrs.ma', 'emajlis.csefrs.ma', 'www.csefrs.ma', 'csefrs.ma'];
 const ALLOWED_HOSTS = (process.env.PROXY_ALLOWED_HOSTS || DEFAULT_HOSTS.join(','))
   .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 app.get('/api/proxy-html', requireAuth, async (req, res) => {
-  const { url } = req.query;
-
   let target;
-  try {
-    target = new URL(String(url));
-  } catch (_) {
+  try { target = new URL(String(req.query.url)); } catch (_) {
     return res.status(400).json({ error: 'URL invalide.' });
   }
-
-  if (target.protocol !== 'https:') {
-    return res.status(400).json({ error: 'Seul le protocole HTTPS est accepté.' });
-  }
-  if (!ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) {
-    return res.status(403).json({
-      error: 'Domaine non autorisÃ©.',
-      allowed: ALLOWED_HOSTS,
-    });
-  }
+  if (target.protocol !== 'https:') return res.status(400).json({ error: 'Seul le protocole HTTPS est accepté.' });
+  if (!ALLOWED_HOSTS.includes(target.hostname.toLowerCase())) return res.status(403).json({ error: 'Domaine non autorisé.' });
 
   try {
     const { data } = await axios.get(target.toString(), {
       timeout: 15000,
       maxRedirects: 0,
       responseType: 'text',
-      
       httpsAgent,
       headers: { 'User-Agent': 'eMajlis-Mobile/1.0' },
       validateStatus: (s) => s >= 200 && s < 300,
     });
     res.json({ html: data, url: target.toString() });
-  } catch (err) {
-    res.status(502).json({ error: 'Impossible de charger le contenu.', detail: err.message });
+  } catch (_) {
+    res.status(502).json({ error: 'Impossible de charger le contenu.' });
   }
 });
 
-// ── Canvas / pdfjs diagnostic (no auth needed) ───────────────────────────────
-app.get('/canvas-test', async (req, res) => {
-  const results = {};
-  try {
-    const c = require('@napi-rs/canvas');
-    const cv = c.createCanvas(10, 10);
-    cv.getContext('2d');
-    results.canvas = '@napi-rs/canvas OK';
-  } catch(e) { results.canvas = `FAIL: ${e.message}`; }
-  try {
-    const p = require('pdfjs-dist/legacy/build/pdf.js');
-    results.pdfjs = `pdfjs OK v${p.version || 'unknown'}`;
-  } catch(e) { results.pdfjs = `FAIL: ${e.message}`; }
-  res.json(results);
-});
-
-app.use((req, res) =>
-  res.status(404).json({ error: `Route non trouvÃ©e : ${req.method} ${req.path}` }),
-);
+app.use((req, res) => res.status(404).json({ error: `Route non trouvée : ${req.method} ${req.path}` }));
 
 app.use(errorHandler);
 
-// Start server locally; export app for Vercel/serverless
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log('eMajlis API running on port ' + PORT);
-    console.log('HumHub: ' + HUMHUB_BASE);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`eMajlis API running on port ${PORT}`);
+    console.log(`HumHub: ${HUMHUB_BASE}`);
   });
+  registerServer(server, httpsAgent);
+  setupShutdownHandlers();
+  if (process.env.PUSH_ENABLED !== '0') require('./services/pushPoller').start();
 }
 
 module.exports = app;

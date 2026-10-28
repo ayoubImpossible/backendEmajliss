@@ -1,33 +1,27 @@
-/**
- * Multer upload middleware
- */
 'use strict';
 
+/**
+ * Pièces jointes des formulaires E-Services.
+ *
+ * Gardées en mémoire, jamais écrites sur un disque public : l'ancien stockage
+ * dans /uploads les rendait téléchargeables par n'importe qui, alors qu'elles
+ * n'étaient même pas transmises à HumHub.
+ */
+
 const multer = require('multer');
-const path   = require('path');
-const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
-const MAX_SIZE   = (parseInt(process.env.MAX_FILE_SIZE_MB) || 10) * 1024 * 1024;
+const MAX_SIZE = (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 10) * 1024 * 1024;
+const ALLOWED = ['.pdf', '.jpg', '.jpeg', '.png', '.docx', '.xlsx'];
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename:    (req, file, cb) => {
-    const ext  = path.extname(file.originalname).toLowerCase();
-    cb(null, `${uuidv4()}${ext}`);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_SIZE, files: 5 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED.includes(ext)) cb(null, true);
+    else cb(Object.assign(new Error(`Type de fichier non autorisé : ${ext}`), { status: 400 }), false);
   },
 });
-
-const fileFilter = (req, file, cb) => {
-  const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.docx', '.xlsx'];
-  const ext     = path.extname(file.originalname).toLowerCase();
-  if (allowed.includes(ext)) {
-    cb(null, true);
-  } else {
-    cb(new Error(`Type de fichier non autorisé: ${ext}`), false);
-  }
-};
-
-const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_SIZE } });
 
 module.exports = upload;

@@ -1,0 +1,9 @@
+node_modules
+.git
+.env
+.env.*
+firebase-service-account.json
+thumbnails
+uploads
+data
+*.log

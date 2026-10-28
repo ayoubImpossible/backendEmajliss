@@ -1,15 +1,11 @@
 {
   "name": "emajlis-api",
   "version": "1.0.0",
-  "description": "eMajlis CSEFRS – Express.js REST API Backend",
+  "description": "eMajlis CSEFRS – API Express (relais HumHub)",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "db:seed": "node src/database/seed.js"
-  },
-  "installConfig": {
-    "allowedScripts": ["@napi-rs/canvas", "@firebase/util", "protobufjs"]
+    "dev": "nodemon src/server.js"
   },
   "keywords": [
     "csefrs",
@@ -20,28 +16,23 @@
   "author": "CSEFRS",
   "license": "ISC",
   "dependencies": {
-    "@sparticuz/chromium": "^153.0.0",
-    "axios": "^1.7.7",
-    "bcryptjs": "^2.4.3",
     "@napi-rs/canvas": "^0.1.67",
-    "pdf-to-img": "^4.2.0",
+    "axios": "^1.7.7",
     "compression": "^1.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
     "express-validator": "^7.2.1",
-    "firebase-admin": "^14.1.0",
     "helmet": "^8.1.0",
-    "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.0.1",
-    "mysql2": "^3.14.1",
-    "pdfjs-dist": "3.11.174",
-    "puppeteer-core": "^25.11.0",
-    "uuid": "^11.1.0"
+    "pdf-to-img": "^4.2.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

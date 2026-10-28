@@ -21,22 +21,16 @@
  *    /emajlis/eservice/catalog -> is_manager.
  */
 
+const crypto = require('crypto');
 const { http, asUser, tryGet } = require('../services/humhub');
 const { TtlCache } = require('../services/cache');
 
 const userCache = new TtlCache(60 * 1000, 500);
 const managerCache = new TtlCache(5 * 60 * 1000, 500);
 
-/**
- * Clé de cache dérivée du jeton, jamais le jeton lui-même.
- * Utilise la longueur + les 24 derniers caractères (signature JWT) :
- * suffisamment unique pour un cache local tout en évitant les collisions
- * du hash 32 bits précédent.
- */
+/** Clé de cache dérivée du jeton (empreinte SHA-256), jamais le jeton lui-même. */
 function tokenKey(token) {
-  // Use token length + last 24 chars — unique enough for a local cache
-  // Never log or expose the token value itself
-  return `${token.length}:${token.slice(-24)}`;
+  return crypto.createHash('sha256').update(String(token)).digest('base64url');
 }
 
 function mapUser(data) {
@@ -80,9 +74,10 @@ async function isEserviceManager(token) {
 }
 
 async function requireAuth(req, res, next) {
-  // Accept token from Authorization header OR ?token= query param (for WebView file viewing)
+  // Uniquement l'en-tête Authorization : un jeton dans l'URL finirait dans les
+  // journaux. Les visionneuses de fichiers utilisent des tickets (/api/files).
   const headerMatch = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
-  const token = headerMatch?.[1] || req.query.token || null;
+  const token = headerMatch?.[1] || null;
 
   if (!token) return res.status(401).json({ error: "Jeton d'authentification requis." });
 

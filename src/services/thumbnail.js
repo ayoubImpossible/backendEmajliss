@@ -1,395 +1,243 @@
 'use strict';
 
 /**
- * Universal Document Thumbnail Service
+ * Miniatures de documents — tous les types de fichiers.
  *
- * Rendering strategy:
- *  - PDF  → pdfjs-dist + node-canvas (local) OR @sparticuz/chromium (Vercel)
- *  - DOCX/PPTX/XLSX/ODT → canvas styled cover (local only)
- *  - On Vercel: only PDFs via chromium headless screenshot
+ *  - PDF                     : vraie première page (Ghostscript, sinon pdf-to-img)
+ *  - Word / Excel / PowerPoint / OpenDocument : conversion LibreOffice en PDF,
+ *                              puis première page
+ *  - Images                  : l'image elle-même, réduite
+ *  - Autres (zip, audio…)    : couverture stylée (couleur du type, extension, nom)
  *
- * On Vercel: canvas native binaries are unavailable.
- * We use @sparticuz/chromium + puppeteer-core to render PDF first page.
+ * Toute miniature est servie après vérification de l'accès de l'utilisateur
+ * auprès de HumHub : le cache est partagé, l'autorisation ne l'est pas.
  */
 
-const fs   = require('fs');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 
-const { TtlCache }     = require('./cache');
-const { http, asUser } = require('./humhub');
+const { TtlCache } = require('./cache');
+const files = require('./files');
+const office = require('./office');
 
-// ── canvas — optional, only available when @napi-rs/canvas is installed ───────
-let createCanvas = null;
-try { createCanvas = require('@napi-rs/canvas').createCanvas; } catch (_) {
-  try { createCanvas = require('canvas').createCanvas; } catch (_) {}
-}
+let canvasLib = null;
+try { canvasLib = require('@napi-rs/canvas'); } catch (_) {}
 
-// ── Patch pdfjs NodeCanvasFactory to not crash with @napi-rs/canvas ───────────
-// pdfjs calls canvas.width = 0 in destroy() which @napi-rs/canvas rejects.
-// We monkey-patch it once at startup before any rendering.
-try {
-  const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-  if (pdfjsLib.NodeCanvasFactory && pdfjsLib.NodeCanvasFactory.prototype) {
-    pdfjsLib.NodeCanvasFactory.prototype.destroy = function(canvasAndContext) {
-      // Do NOT set width/height to 0 — @napi-rs/canvas crashes on this
-      canvasAndContext.canvas  = null;
-      canvasAndContext.context = null;
-    };
-    pdfjsLib.NodeCanvasFactory.prototype.reset = function(canvasAndContext, width, height) {
-      // Safe reset
-      if (canvasAndContext.canvas) {
-        try {
-          canvasAndContext.canvas.width  = width;
-          canvasAndContext.canvas.height = height;
-        } catch (_) {}
-      }
-    };
-    console.log('[thumbnail] pdfjs NodeCanvasFactory patched for @napi-rs/canvas');
-  }
-} catch (_) {}
+const VERSION = 'v5';
+const MAX_DOWNLOAD = 60 * 1024 * 1024;
+const thumbCache = new TtlCache(6 * 60 * 60 * 1000, 800);
+const accessCache = new TtlCache(10 * 60 * 1000, 20000);
+const inflight = new Map();
 
-// ── Cache ─────────────────────────────────────────────────────────────────────
-const thumbCache = new TtlCache(60 * 60 * 1000, 500); // 1 h, max 500 entries
-
-// ── Disk persistence — local only ─────────────────────────────────────────────
-const DISK_DIR = path.join(__dirname, '../../thumbnails');
+// ── Disque ────────────────────────────────────────────────────────────────────
+const DISK_DIR = path.resolve(process.env.THUMB_CACHE_DIR || path.join(__dirname, '../../thumbnails'));
 let diskEnabled = false;
-try {
-  if (!fs.existsSync(DISK_DIR)) fs.mkdirSync(DISK_DIR, { recursive: true });
-  diskEnabled = true;
-} catch (_) {}
+try { fs.mkdirSync(DISK_DIR, { recursive: true }); diskEnabled = true; } catch (_) {}
 
-function diskPath(key) {
-  return path.join(DISK_DIR, 'v3_' + key.replace(/[^a-z0-9_:-]/gi, '_') + '.jpg');
-}
-function loadFromDisk(key) {
+const keyOf = (source, id) => `${VERSION}_${source}_${String(id).replace(/[^0-9a-z]/gi, '')}`;
+const diskPath = (key) => path.join(DISK_DIR, `${key}.jpg`);
+
+function readDisk(key) {
   if (!diskEnabled) return null;
   try {
-    const p = diskPath(key);
-    if (!fs.existsSync(p)) return null;
-    const buf = fs.readFileSync(p);
-    if (buf.length < 1000) return null;
-    thumbCache.set(key, buf);
-    return buf;
-  } catch (_) { return null; }
+    const buf = fs.readFileSync(diskPath(key));
+    if (buf.length > 500) { thumbCache.set(key, buf); return buf; }
+  } catch (_) {}
+  return null;
 }
-function saveToDisk(key, jpeg) {
-  if (!diskEnabled) return;
-  try { fs.writeFileSync(diskPath(key), jpeg); } catch (_) {}
+function writeDisk(key, buf) {
+  if (diskEnabled) fs.writeFile(diskPath(key), buf, () => {});
 }
 
-// ── In-flight deduplication ───────────────────────────────────────────────────
-const _inflight = new Map();
+// ── Accès ─────────────────────────────────────────────────────────────────────
+function tokenKey(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('base64url').slice(0, 22);
+}
 
-// ── PDF via pdf-to-img (uses pdfjs internally with proper canvas handling) ────
-async function renderPdfLocal(pdfBuffer) {
+/** L'utilisateur peut-il lire ce fichier ? Une requête « 1 octet » chez HumHub, mise en cache 10 min. */
+async function canAccess(source, id, token) {
+  const k = `${tokenKey(token)}:${source}:${id}`;
+  const hit = accessCache.get(k);
+  if (hit !== undefined) return hit;
+  let ok = false;
   try {
-    // pdf-to-img uses ESM top-level await — must use dynamic import(), not require()
-    const { pdf } = await import('pdf-to-img');
-
-    // Wrap in a 20s timeout — corrupt PDFs can hang indefinitely
-    const renderPromise = (async () => {
-      const doc = await pdf(pdfBuffer, { scale: 1.5 });
-      for await (const page of doc) {
-        if (page && page.length > 5000) {
-          console.log(`[thumbnail/pdf-to-img] rendered ${page.length} bytes`);
-          return page;
-        }
-        break; // only first page
-      }
-      return null;
-    })();
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('render timeout 20s')), 20000)
-    );
-
-    return await Promise.race([renderPromise, timeoutPromise]);
+    const r = await files.fetchUpstream(source, id, token, { responseType: 'stream', range: 'bytes=0-0', timeout: 10000 });
+    r.data.destroy();
+    ok = true;
   } catch (err) {
-    console.warn(`[thumbnail/pdf-to-img] ${err.message}`);
-    return null;
-  }
-}
-
-// ── PDF via Ghostscript (fallback for Arabic/complex PDFs) ───────────────────
-// Uses gs command to convert first page to JPEG — handles all PDF types
-async function renderPdfGhostscript(pdfBuffer) {
-  const { execFile } = require('child_process');
-  const { promisify } = require('util');
-  const execFileAsync = promisify(execFile);
-  const os = require('os');
-
-  const tmpPdf = path.join(os.tmpdir(), `thumb_in_${Date.now()}.pdf`);
-  const tmpJpg = path.join(os.tmpdir(), `thumb_out_${Date.now()}.jpg`);
-
-  try {
-    fs.writeFileSync(tmpPdf, pdfBuffer);
-
-    await execFileAsync('gs', [
-      '-dNOPAUSE', '-dBATCH', '-dSAFER',
-      '-sDEVICE=jpeg',
-      '-dJPEGQ=82',
-      '-r120',           // 120 DPI — good quality, reasonable size
-      '-dFirstPage=1',
-      '-dLastPage=1',    // first page only
-      '-dFitPage',
-      '-dPDFFitPage',
-      `-sOutputFile=${tmpJpg}`,
-      tmpPdf,
-    ], { timeout: 20000 });
-
-    if (fs.existsSync(tmpJpg)) {
-      const buf = fs.readFileSync(tmpJpg);
-      if (buf.length > 5000) {
-        console.log(`[thumbnail/ghostscript] rendered ${buf.length} bytes`);
-        return buf;
-      }
+    const s = err.response?.status;
+    if (s && s !== 401 && s !== 403 && s !== 404) {
+      // Panne passagère : ne pas mémoriser un refus.
+      return false;
     }
-    return null;
-  } catch (err) {
-    console.warn(`[thumbnail/ghostscript] ${err.message}`);
-    return null;
-  } finally {
-    try { fs.unlinkSync(tmpPdf); } catch (_) {}
-    try { fs.unlinkSync(tmpJpg); } catch (_) {}
   }
-}
-async function renderPdfChromium(pdfBuffer) {
-  let browser = null;
-  try {
-    const chromium = require('@sparticuz/chromium');
-    const puppeteer = require('puppeteer-core');
-
-    // Build a data URL for the PDF
-    const base64 = pdfBuffer.toString('base64');
-    const dataUrl = `data:application/pdf;base64,${base64}`;
-
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: { width: 800, height: 600 },
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
-
-    const page = await browser.newPage();
-    await page.goto(dataUrl, { waitUntil: 'networkidle0', timeout: 20000 });
-
-    // Wait for PDF to render
-    await new Promise(r => setTimeout(r, 1500));
-
-    const jpeg = await page.screenshot({ type: 'jpeg', quality: 82, clip: { x: 0, y: 0, width: 800, height: 600 } });
-    await browser.close();
-    browser = null;
-
-    return jpeg?.length > 5000 ? jpeg : null;
-  } catch (err) {
-    console.warn(`[thumbnail/chromium] ${err.message}`);
-    if (browser) { try { await browser.close(); } catch (_) {} }
-    return null;
-  }
+  accessCache.set(k, ok);
+  return ok;
 }
 
-// ── Styled cover (canvas — local only) ────────────────────────────────────────
+// ── Rendus ────────────────────────────────────────────────────────────────────
 const EXT_COLOR = {
-  pdf:  '#C62828',
-  docx: '#1565C0', doc:  '#1565C0',
-  xlsx: '#2E7D32', xls:  '#2E7D32',
-  pptx: '#E65100', ppt:  '#E65100',
-  odt:  '#4527A0', odp:  '#00695C', ods: '#558B2F',
+  pdf: '#C62828', doc: '#1565C0', docx: '#1565C0', rtf: '#1565C0', odt: '#4527A0',
+  xls: '#2E7D32', xlsx: '#2E7D32', csv: '#2E7D32', ods: '#558B2F',
+  ppt: '#E65100', pptx: '#E65100', odp: '#00695C',
+  zip: '#6D4C41', rar: '#6D4C41', mp3: '#AD1457', mp4: '#6A1B9A', mov: '#6A1B9A',
 };
 
 function renderCover(ext, filename) {
-  if (!createCanvas) return null;
-  const W = 800, H = 520;
-  const canvas = createCanvas(W, H);
-  const ctx    = canvas.getContext('2d');
-  const bg     = EXT_COLOR[(ext || '').toLowerCase()] || '#37474F';
-  const grad   = ctx.createLinearGradient(0, 0, 0, H);
+  if (!canvasLib) return null;
+  const W = 600, H = 400;
+  const canvas = canvasLib.createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+  const bg = EXT_COLOR[ext] || '#37474F';
+  const grad = ctx.createLinearGradient(0, 0, W, H);
   grad.addColorStop(0, bg);
   grad.addColorStop(1, '#1a1a2e');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
-  const lineWidths = [0.78, 0.55, 0.85, 0.42, 0.70, 0.63, 0.80, 0.50, 0.75, 0.45];
-  ctx.fillStyle = 'rgba(255,255,255,0.13)';
-  lineWidths.forEach((w, i) => {
-    ctx.beginPath();
-    ctx.roundRect(32, 40 + i * 30, W * w, 11, 3);
-    ctx.fill();
-  });
-  ctx.fillStyle = 'rgba(0,0,0,0.40)';
-  ctx.fillRect(0, H - 72, W, 72);
-  const extLabel = (ext || '?').toUpperCase().slice(0, 5);
-  const badgeW   = Math.max(60, extLabel.length * 12 + 24);
-  ctx.fillStyle  = 'rgba(255,255,255,0.22)';
-  ctx.beginPath();
-  ctx.roundRect(24, H - 56, badgeW, 34, 8);
-  ctx.fill();
-  ctx.fillStyle    = '#FFFFFF';
-  ctx.font         = 'bold 14px sans-serif';
-  ctx.textAlign    = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(extLabel, 24 + badgeW / 2, H - 39);
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  [0.78, 0.55, 0.85, 0.42, 0.7, 0.63].forEach((w, i) => ctx.fillRect(32, 40 + i * 30, (W - 64) * w, 10));
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.fillRect(0, H - 80, W, 80);
+  const label = (ext || 'FICHIER').toUpperCase().slice(0, 6);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText(label, 28, H - 32);
   if (filename) {
     const base = path.basename(filename);
-    const name = base.length > 50 ? base.slice(0, 48) + '…' : base;
-    ctx.font      = '13px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillText(name, 24 + badgeW + 14, H - 39);
+    ctx.font = '18px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillText(base.length > 44 ? `${base.slice(0, 42)}…` : base, 28 + label.length * 22 + 18, H - 34);
   }
-  return canvas.toBuffer('image/jpeg', { quality: 85 });
+  return canvas.toBuffer('image/jpeg', 85);
 }
 
-// ── Extract first embedded JPEG from PDF binary ───────────────────────────────
-// PDFs store embedded images as raw JPEG streams between FF D8 ... FF D9 markers.
-// This extracts the largest one (likely the cover page image).
-function extractFirstJpegFromPdf(pdfBuffer) {
+async function resizeImage(buffer, width = 600) {
+  if (!canvasLib) return buffer.length < 1.5 * 1024 * 1024 ? buffer : null;
   try {
-    const SOI = Buffer.from([0xFF, 0xD8]); // JPEG start
-    const EOI = Buffer.from([0xFF, 0xD9]); // JPEG end
-    let best = null;
-    let pos = 0;
-    while (pos < pdfBuffer.length - 4) {
-      const start = pdfBuffer.indexOf(SOI, pos);
-      if (start === -1) break;
-      const end = pdfBuffer.indexOf(EOI, start + 2);
-      if (end === -1) break;
-      const jpeg = pdfBuffer.slice(start, end + 2);
-      if (jpeg.length > 10000 && (!best || jpeg.length > best.length)) {
-        best = jpeg;
-      }
-      pos = end + 2;
-    }
-    return best;
-  } catch (_) { return null; }
-}
-
-// ── Core generator ─────────────────────────────────────────────────────────────
-async function _doGenerate(fileId, token, ext, filename, downloadPath) {
-  // Download the file — for PDFs use Range header to get only first 10MB
-  // This is enough for pdfjs to render page 1 even for large files
-  let fileBuffer = null;
-  const MAX_BYTES = 10 * 1024 * 1024; // 10MB — enough for first page of any PDF
-  const endpoints = downloadPath && downloadPath.includes('/cfiles/')
-    ? [`/emajlis/drive/file/${fileId}/download`, `/file/download?id=${fileId}`, `/emajlis/cfiles/file/${fileId}/download`]
-    : [downloadPath || `/emajlis/drive/file/${fileId}/download`];
-
-  for (const ep of endpoints) {
-    try {
-      const r = await http.get(ep, {
-        ...asUser(token),
-        responseType: 'arraybuffer',
-        timeout: 30000,
-        headers: {
-          ...(asUser(token).headers || {}),
-          // Request only first 3MB — enough for pdfjs to render page 1
-          'Range': `bytes=0-${MAX_BYTES - 1}`,
-        },
-        // Accept both 200 (full) and 206 (partial) responses
-        validateStatus: (s) => s === 200 || s === 206,
-      });
-      fileBuffer = Buffer.from(r.data);
-      console.log(`[thumb:${fileId}] downloaded ${fileBuffer.length} bytes from ${ep}`);
-      break;
-    } catch (e) {
-      console.warn(`[thumb:${fileId}] download failed (${ep}): ${e.message}`);
-      if (e.response?.status === 401 || e.response?.status === 403) break;
-    }
-  }
-
-  if (!fileBuffer || fileBuffer.length === 0) return null;
-
-  // Only generate real thumbnails for PDFs via pdfjs or Ghostscript.
-  // For all other file types, return null — no fake colored covers.
-  if (ext !== 'pdf') {
+    const img = await canvasLib.loadImage(buffer);
+    const scale = Math.min(1, width / img.width);
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = canvasLib.createCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toBuffer('image/jpeg', 82);
+  } catch (err) {
+    console.warn(`[thumb] image illisible : ${err.message}`);
     return null;
   }
+}
 
-  // Try pdfjs + canvas first (fast, no extra process)
-  const local = await renderPdfLocal(fileBuffer);
-  if (local) {
-    console.log(`[thumb:${fileId}] ✓ pdfjs render OK (${local.length} bytes)`);
-    return local;
+async function renderPdfBuffer(pdfBuffer) {
+  // 1. Ghostscript : gère les PDF arabes et les polices complexes.
+  const tmp = path.join(office.WORK_DIR, `${crypto.randomBytes(8).toString('hex')}.pdf`);
+  try {
+    fs.writeFileSync(tmp, pdfBuffer);
+    const gs = await office.pdfFirstPageJpeg(tmp);
+    if (gs) return gs;
+  } finally {
+    fs.rm(tmp, { force: true }, () => {});
   }
-
-  // pdfjs failed (Arabic fonts, corrupt PDF etc) — try Ghostscript
-  // Ghostscript handles ALL PDF types including complex Arabic fonts
-  const gs = await renderPdfGhostscript(fileBuffer);
-  if (gs) {
-    console.log(`[thumb:${fileId}] ✓ ghostscript render OK (${gs.length} bytes)`);
-    return gs;
+  // 2. pdf-to-img (pdf.js) si Ghostscript est absent.
+  try {
+    const { pdf } = await import('pdf-to-img');
+    const doc = await pdf(pdfBuffer, { scale: 1 });
+    for await (const page of doc) {
+      if (page && page.length > 3000) return (await resizeImage(page)) || page;
+      break;
+    }
+  } catch (err) {
+    console.warn(`[thumb] pdf-to-img : ${err.message}`);
   }
-
-  // Last resort: extract embedded JPEG from PDF binary
-  const embedded = extractFirstJpegFromPdf(fileBuffer);
-  if (embedded) {
-    console.log(`[thumb:${fileId}] ✓ embedded JPEG extracted (${embedded.length} bytes)`);
-    return embedded;
-  }
-
-  console.log(`[thumb:${fileId}] all render methods failed`);
   return null;
 }
 
-// ── Concurrency limit — only 1 thumbnail at a time to avoid OOM ──────────────
-let _activeCount = 0;
-const _pendingQueue = [];
+async function download(source, id, token) {
+  const r = await files.fetchUpstream(source, id, token, { responseType: 'arraybuffer', timeout: 90000 });
+  const buf = Buffer.from(r.data);
+  if (buf.length > MAX_DOWNLOAD) throw new Error('fichier trop volumineux pour une miniature');
+  return { buf, disposition: r.headers['content-disposition'], contentType: r.headers['content-type'] || '' };
+}
 
-function _withConcurrencyLimit(fn) {
-  return new Promise((resolve) => {
-    const run = () => {
-      _activeCount++;
-      Promise.resolve(fn()).then((result) => {
-        _activeCount--;
-        resolve(result);
-        if (_pendingQueue.length > 0) {
-          const next = _pendingQueue.shift();
-          next();
-        }
+async function produce(source, id, token, filenameHint) {
+  let filename = filenameHint || '';
+  let kind = files.viewKind(filename);
+
+  // Nom inconnu : on le lit dans les métadonnées.
+  if (!filename) {
+    const info = await files.fileInfo(source, id, token).catch(() => null);
+    filename = info?.filename || '';
+    kind = files.viewKind(filename, info?.mimeType);
+  }
+  const ext = files.extOf(filename);
+
+  if (kind === 'other') return renderCover(ext, filename);
+
+  try {
+    const { buf, disposition, contentType } = await download(source, id, token);
+    if (!filename) {
+      filename = files.filenameFromDisposition(disposition);
+      kind = files.viewKind(filename, contentType);
+    }
+    let out = null;
+    if (kind === 'pdf') out = await renderPdfBuffer(buf);
+    else if (kind === 'image') out = await resizeImage(buf);
+    else if (kind === 'office') {
+      const pdfPath = await office.convertToPdf(buf, files.extOf(filename) || ext, `${source}:${id}:${buf.length}`);
+      if (pdfPath) out = await office.pdfFirstPageJpeg(pdfPath);
+    }
+    return out || renderCover(files.extOf(filename) || ext, filename);
+  } catch (err) {
+    const s = err.response?.status;
+    if (s === 401 || s === 403 || s === 404) throw err;
+    console.warn(`[thumb] ${source}:${id} : ${err.message}`);
+    return renderCover(ext, filename);
+  }
+}
+
+// Deux générations à la fois (LibreOffice est déjà sérialisé à part).
+let active = 0;
+const queue = [];
+function limited(fn) {
+  return new Promise((resolve, reject) => {
+    const start = () => {
+      active += 1;
+      Promise.resolve().then(fn).then(resolve, reject).finally(() => {
+        active -= 1;
+        const next = queue.shift();
+        if (next) next();
       });
     };
-    if (_activeCount < 1) {
-      run();
-    } else {
-      _pendingQueue.push(run);
-    }
+    if (active < 2) start(); else queue.push(start);
   });
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────────
-async function generateThumbnail(fileId, token, cacheKey, filename, downloadPath) {
-  const hit = thumbCache.get(cacheKey);
-  if (hit) return hit;
-
-  const diskHit = loadFromDisk(cacheKey);
-  if (diskHit) return diskHit;
-
-  if (_inflight.has(cacheKey)) {
-    console.log(`[thumb:${fileId}] joining in-flight`);
-    return _inflight.get(cacheKey);
-  }
-
-  filename  = filename || String(fileId);
-  const ext = filename.split('.').pop().toLowerCase();
-
-  const promise = _withConcurrencyLimit(() => Promise.race([
-    _doGenerate(fileId, token, ext, filename, downloadPath),
-    new Promise(resolve => setTimeout(() => { console.warn(`[thumb:${fileId}] 50s timeout`); resolve(null); }, 50000)),
-  ]).then(result => {
-    _inflight.delete(cacheKey);
-    if (!result) { console.warn(`[thumb:${fileId}] ✗ failed — not caching`); return null; }
-    thumbCache.set(cacheKey, result);
-    saveToDisk(cacheKey, result);
-    console.log(`[thumb:${fileId}] ✓ cached ${result.length} bytes (${filename})`);
-    return result;
-  }).catch(err => {
-    _inflight.delete(cacheKey);
-    console.warn(`[thumb:${fileId}] unexpected error: ${err.message}`);
-    return null;
-  }));
-
-  _inflight.set(cacheKey, promise);
-  return promise;
+/** Miniature en cache (mémoire ou disque), sans rien générer. */
+function cached(source, id) {
+  const key = keyOf(source, id);
+  return thumbCache.get(key) || readDisk(key);
 }
 
-module.exports = { generateThumbnail, thumbCache };
+/** Génère (ou rejoint la génération en cours) ; renvoie le JPEG ou null. */
+function generate(source, id, token, filenameHint) {
+  const key = keyOf(source, id);
+  const hit = cached(source, id);
+  if (hit) return Promise.resolve(hit);
+  if (inflight.has(key)) return inflight.get(key);
+
+  const p = limited(() => produce(source, id, token, filenameHint))
+    .then((buf) => {
+      if (buf) { thumbCache.set(key, buf); writeDisk(key, buf); }
+      return buf || null;
+    })
+    .catch(() => null)
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+module.exports = { generate, cached, canAccess, thumbCache, VERSION };

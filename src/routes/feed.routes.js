@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 const express = require('express');
 const router = express.Router();
@@ -7,7 +7,7 @@ const { requireAuth } = require('../middleware/humhubAuth');
 
 router.get('/', requireAuth, ctrl.getFeed);
 
-// La route la plus spÃ©cifique d'abord : /search/types avant /search.
+// La route la plus spécifique d'abord : /search/types avant /search.
 router.get('/search/types', requireAuth, ctrl.searchTypes);
 router.get('/search', requireAuth, ctrl.search);
 
@@ -16,13 +16,9 @@ router.get('/spaces/:id', requireAuth, ctrl.getSpace);
 router.get('/spaces/:containerId/feed', requireAuth, ctrl.getSpaceFeed);
 
 router.get('/notifications', requireAuth, ctrl.getNotifications);
-router.get('/notifications/mock', requireAuth, ctrl.getMockNotifications);
-router.get('/test/notifications', ctrl.getMockNotifications); // No auth for testing
 router.get('/notifications/unseen', requireAuth, ctrl.getUnseenCount);
 router.patch('/notifications/seen', requireAuth, ctrl.markSeen);
 
 router.get('/calendar', requireAuth, ctrl.getCalendar);
 
 module.exports = router;
-
-

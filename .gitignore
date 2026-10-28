@@ -18,3 +18,7 @@ dist/
 !certs/README.md
 
 .vercel
+
+# Données d’exécution (inscriptions push, miniatures en cache)
+data/
+thumbnails/

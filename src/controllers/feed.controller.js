@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 
 
@@ -8,7 +8,7 @@ const { enrichItems } = require('../services/enrich');
 const clampLimit = (v, def, max = 100) => Math.min(Math.max(parseInt(v, 10) || def, 1), max);
 const toPage = (v) => Math.max(parseInt(v, 10) || 1, 1);
 
-/** Enveloppe de pagination commune Ã  toutes les listes. */
+/** Enveloppe de pagination commune à toutes les listes. */
 function paginated(data, results, page) {
   return {
     total: data.total ?? results.length,
@@ -230,11 +230,6 @@ function mapNotification(n) {
 
 exports.getNotifications = async (req, res, next) => {
   try {
-    console.log('=== NOTIFICATION REQUEST START ===');
-    console.log('Time:', new Date().toISOString());
-    console.log('Token present:', !!req.humhubToken);
-    console.log('User-Agent:', req.headers['user-agent']);
-    console.log('Query params:', req.query);
     
     const page = toPage(req.query.page);
     const limit = clampLimit(req.query.limit, 20);
@@ -256,7 +251,6 @@ exports.getNotifications = async (req, res, next) => {
           timeout: 15000,
         });
         data = response.data;
-        console.log('[getNotifications] Success with params:', params, 'results:', data?.results?.length || 0);
         break;
       } catch (humhubError) {
         lastError = humhubError;
@@ -308,7 +302,6 @@ exports.getUnseenCount = async (req, res, next) => {
     // HumHub returns different field names — try all variants
     const count = data?.unseen ?? data?.total ?? data?.count ?? data?.unseenCount
       ?? (Array.isArray(data?.results) ? data.results.length : 0);
-    console.log('[getUnseenCount] data:', JSON.stringify(data), 'count:', count);
     res.json({ total: count, count, results: data?.results || [] });
   } catch (err) {
     console.error('[getUnseenCount] Error:', err.response?.status, err.message);
@@ -344,56 +337,7 @@ exports.markSeen = async (req, res, next) => {
   res.json({ success: true });
 };
 
-// Mock notifications for testing
-exports.getMockNotifications = async (req, res, next) => {
-  try {
-    const page = toPage(req.query.page);
-    const mockNotifications = [
-      {
-        id: '1',
-        class: 'contentcreated',
-        output: '<strong>Admin</strong> a créé un nouveau contenu',
-        seen: false,
-        created_at: new Date(Date.now() - 3600000).toISOString(),
-        originator: {
-          id: '1',
-          display_name: 'Admin',
-          url: '/user/admin',
-          profile: { image_url: null }
-        }
-      },
-      {
-        id: '2',
-        class: 'like',
-        output: '<strong>Utilisateur</strong> a aimé votre publication',
-        seen: true, 
-        created_at: new Date(Date.now() - 7200000).toISOString(),
-        originator: {
-          id: '2',
-          display_name: 'Utilisateur',
-          url: '/user/user',
-          profile: { image_url: null }
-        }
-      }
-    ];
-    
-    const results = mockNotifications.map(mapNotification).filter(Boolean);
-    
-    res.json({
-      results: results,
-      total: results.length,
-      pages: 1,
-      page: page,
-      mock: true
-    });
-    
-  } catch (err) {
-    next(err);
-  }
-};
-
-// ── Calendrier ───────────────────────────────────────────────────────────────
-
+// Agenda
 exports.getCalendar = async (req, res, next) => {
   const page = toPage(req.query.page);
   const auth = asUser(req.humhubToken);

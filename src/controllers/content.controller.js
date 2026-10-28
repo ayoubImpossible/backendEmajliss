@@ -1,132 +1,28 @@
-﻿'use strict';
+'use strict';
 
 const { http, asUser, tryGet } = require('../services/humhub');
 const { normalizeType, toPlainText, titleFromText, imageFromText } = require('../services/enrich');
-const axios = require('axios');
-const { httpsAgent } = require('../services/humhub');
 
-const HUMHUB_BASE = (process.env.HUMHUB_BASE_URL || 'https://emajlis-dev.csefrs.ma').replace(/\/+$/, '');
-const WP_BASE = (process.env.WP_BASE_URL || 'https://intranet.csefrs.ma').replace(/\/+$/, '');
-const WP_API  = `${WP_BASE}/wp-json/wp/v2`;
+const wordpress = require('../services/wordpress');
 
 /**
- * Fetch the full HTML content of a MajlissPost from HumHub web page.
- * HumHub stores the rich HTML in the web view — extract .imported-document-content
+ * Article WordPress complet (Journal ou revue de presse) au format de détail.
+ * Le HTML réel est renvoyé : l'application l'affiche, sans rediriger vers le site.
  */
-async function fetchMajlissPostHtml(majlissId, token) {
-  // The MajlissPost HTML is stored in HumHub's content stream
-  // Try HumHub REST API endpoints for externalHtmlStream module
-  const urlsToTry = [
-    `/external-html-stream/majliss-post/${majlissId}`,
-    `/emajlis/external-html-stream/majliss-post/${majlissId}`,
-  ];
-
-  for (const endpoint of urlsToTry) {
-    try {
-      console.log(`[MajlissPost] trying API: ${endpoint}`);
-      const { tryGetFast } = require('../services/humhub');
-      const result = await tryGetFast(endpoint, token);
-      if (result) {
-        console.log(`[MajlissPost] ${endpoint} returned:`, JSON.stringify(result).slice(0, 300));
-        const html = result?.content || result?.html || result?.body
-          || result?.majlissPost?.content || result?.post?.content
-          || result?.data?.content || result?.message;
-        if (html && html.length > 100) {
-          console.log(`[MajlissPost] found HTML (${html.length} bytes) at ${endpoint}`);
-          return html;
-        }
-      }
-    } catch (err) {
-      console.log(`[MajlissPost] ${endpoint} failed: ${err?.response?.status || err?.message}`);
-    }
-  }
-  return null;
-}
-
-/** Clean WordPress HTML to prevent srcset leakage in RenderHtml */
-function cleanWpHtml(html) {
-  if (!html) return '';
-  return html
-    // Remove srcset - it causes text to leak outside <img> tags
-    .replace(/\s+srcset\s*=\s*[\"'][^\"']*[\"']/gi, '')
-    // Remove sizes attribute
-    .replace(/\s+sizes\s*=\s*[\"'][^\"']*[\"']/gi, '')
-    // Remove loading attribute
-    .replace(/\s+loading\s*=\s*[\"'][^\"']*[\"']/gi, '')
-    // Remove width/height to make images responsive
-    .replace(/(<img[^>]*)\s+width\s*=\s*[\"']\d+[\"']/gi, '$1')
-    .replace(/(<img[^>]*)\s+height\s*=\s*[\"']\d+[\"']/gi, '$1');
-}
-
-
-/** Fetch the best matching WordPress post for an article by date, with fallback. */
-async function fetchWpArticle(createdAt, objectId, metaUrl) {
-  try {
-    // Strategy 1: search by slug extracted from HumHub URL
-    // HumHub URL format: /content/perma?id=XXX or /wiki/... etc
-    // For ImportArticle/MajlissPost the URL often contains the WP slug
-    if (metaUrl) {
-      const slug = metaUrl.split('/').filter(Boolean).pop()?.split('?')[0];
-      if (slug && slug.length > 3 && !/^\d+$/.test(slug)) {
-        try {
-          const { data: bySlug } = await axios.get(`${WP_API}/posts`, {
-            params: { slug, _embed: 'wp:featuredmedia' },
-            timeout: 10000,
-          });
-          if (Array.isArray(bySlug) && bySlug.length) return buildWpPreview(bySlug[0]);
-        } catch (_) {}
-      }
-    }
-
-    // Strategy 2: exact date match
-    if (createdAt) {
-      const day    = createdAt.slice(0, 10);
-      const after  = `${day}T00:00:00`;
-      const before = `${day}T23:59:59`;
-      const { data } = await axios.get(`${WP_API}/posts`, {
-        params: { per_page: 10, after, before, _embed: 'wp:featuredmedia', orderby: 'date', order: 'asc' },
-        timeout: 10000,
-      });
-      const posts = Array.isArray(data) ? data : [];
-      if (posts.length === 1) return buildWpPreview(posts[0]);
-      if (posts.length > 1) {
-        // Same strategy as enrich.js: sort by WP ID asc, pick by objectId modulo
-        const sorted = [...posts].sort((a, b) => a.id - b.id);
-        const idx = objectId ? (Number(objectId) % sorted.length) : 0;
-        return buildWpPreview(sorted[idx] || sorted[0]);
-      }
-    }
-
-    // No reliable match found → return null
-    return null;
-  } catch (_) { return null; }
-}
-
-function buildWpPreview(p) {
-  if (!p) return null;
-  const media    = p._embedded?.['wp:featuredmedia']?.[0];
-  const imageUrl = media?.source_url || null;
-
-  let body = p.content?.rendered || '';
-  if (imageUrl) {
-    const escapedUrl = imageUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    body = body.replace(
-      new RegExp(`<figure[^>]*>[\\s\\S]*?<img[^>]*src=["'][^"']*${escapedUrl.split('/').pop()}[^"']*["'][^>]*>[\\s\\S]*?<\\/figure>`, 'i'),
-      '',
-    );
-  }
-
+async function loadWordpressArticle(hint) {
+  const art = wordpress.toArticle(await wordpress.findEntry(hint));
+  if (!art) return null;
   return {
-    title:      (p.title?.rendered || '').replace(/&#8211;/g, '–').replace(/&amp;/g, '&').replace(/<[^>]+>/g, '').trim(),
-    body:       cleanWpHtml(body),
+    title: hint.title || art.title,
+    body: art.body,
     bodyFormat: 'html',
-    imageUrl,
-    extra:      { wpId: p.id, wpUrl: p.link },
+    imageUrl: art.imageUrl,
+    extra: { ...art.extra, isRevueDePresse: art.isRevueDePresse },
   };
 }
 
 /** Charge le modèle spécialisé et en extrait le corps complet. */
-async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
+async function loadBody(type, objectId, token, createdAt, titleHint = '') {
   switch (type) {
 
     case 'post': {
@@ -139,28 +35,10 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
       const majlissMatch = message.match(/https?:\/\/[^\s)]+\/external-html-stream\/majliss-post\/view\?id=(\d+)/i)
         || message.match(/https?:\/\/[^\s)]+\/revue-presse[^\s)]*\?id=(\d+)/i);
 
-      if (majlissMatch) {
-        const majlissId = majlissMatch[1];
-        console.log(`[Post] detected Revue de Presse link, majlissId=${majlissId}, full match=${majlissMatch[0]}`);
-        const html = await fetchMajlissPostHtml(majlissId, token);
-        if (html) {
-          return {
-            title:      titleFromText(message),
-            body:       html,
-            bodyFormat: 'html',
-            imageUrl:   imageFromText(message),
-            extra:      { isRevueDePresse: true },
-          };
-        }
-        // HTML fetch failed — signal frontend to open in WebView with auth
-        const revueUrl = majlissMatch[0];
-        return {
-          title:      titleFromText(message),
-          body:       message,
-          bodyFormat: 'markdown',
-          imageUrl:   imageFromText(message),
-          extra:      { isRevueDePresse: true, revueUrl },
-        };
+      if (majlissMatch || /revue\s+de\s+presse/i.test(message)) {
+        const title = titleHint || titleFromText(message);
+        const art = await loadWordpressArticle({ title, createdAt });
+        if (art) return art;
       }
 
       return {
@@ -173,8 +51,8 @@ async function loadBody(type, objectId, token, createdAt, metaUrl = '') {
     }
 
     case 'article': {
-      // ImportArticle / MajlissPost — fetch from WordPress using date + objectId matching.
-      return fetchWpArticle(createdAt, objectId, metaUrl);
+      // MajlissPost / ImportArticle : contenu réel tiré de WordPress (articles et pages).
+      return loadWordpressArticle({ title: titleHint, createdAt });
     }
 
     case 'calendar': {
@@ -300,9 +178,10 @@ exports.show = async (req, res, next) => {
     const meta      = data.metadata || {};
     const type      = normalizeType(meta.object_model || '');
     const createdAt = meta.created_at || null;
-    const metaUrl   = meta.url || '';
+    // Le titre du fil (preview.title) sert à retrouver l'article WordPress exact.
+    const titleHint = String(data.preview?.title || req.query.title || '').slice(0, 300);
 
-    const loaded = await loadBody(type, meta.object_id, token, createdAt, metaUrl);
+    const loaded = await loadBody(type, meta.object_id, token, createdAt, titleHint);
 
     res.setHeader('Cache-Control', 'no-store');
     res.json({
