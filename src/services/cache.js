@@ -1,22 +1,9 @@
 'use strict';
 
-/**
- * Cache mémoire à durée de vie, volontairement minimal.
- *
- * Sert deux besoins mesurés pendant l'audit :
- *  - éviter d'appeler /auth/current à chaque requête (la latence était doublée) ;
- *  - éviter de redemander à HumHub le titre d'un contenu déjà vu dans le fil.
- *
- * Pas de dépendance externe : quelques centaines d'entrées, un seul processus.
- * Si l'API passe un jour derrière plusieurs instances, remplacer par Redis.
- */
+
 
 class TtlCache {
-  /**
-   * Sentinel stored in the cache to represent a null result.
-   * This allows caching failed fetches (404s, timeouts) so they are not
-   * retried on every request, while still returning null to callers.
-   */
+ 
   static NULL_SENTINEL = Symbol('null_result');
 
   /**
@@ -36,10 +23,8 @@ class TtlCache {
       this.map.delete(key);
       return undefined;
     }
-    // Remise en fin de Map : approximation LRU suffisante ici.
     this.map.delete(key);
     this.map.set(key, entry);
-    // Return sentinel as-is so getOrSet can detect it
     return entry.value;
   }
 
@@ -51,23 +36,17 @@ class TtlCache {
     this.map.set(key, { value, expiresAt: Date.now() + this.ttlMs });
   }
 
-  /**
-   * Récupère, ou calcule puis mémorise.
-   * Les valeurs nulles sont mémorisées sous forme de sentinelle pour éviter de
-   * retenter les requêtes échouées (404, timeout) à chaque appel.
-   */
+ 
   async getOrSet(key, factory) {
     const hit = this.get(key);
     if (hit !== undefined) {
       return hit === TtlCache.NULL_SENTINEL ? null : hit;
     }
     const value = await factory();
-    // Cache nulls too — as a sentinel — so failed fetches aren't retried every request
     this.set(key, value ?? TtlCache.NULL_SENTINEL);
     return value ?? null;
   }
 
-  /** Éviction explicite des entrées expirées — utilisée par le nettoyage périodique. */
   cleanup() {
     const now = Date.now();
     for (const [key, entry] of this.map.entries()) {
@@ -88,10 +67,7 @@ class TtlCache {
   }
 }
 
-/**
- * Exécute des tâches en parallèle avec une limite de concurrence.
- * Évite d'ouvrir 20 connexions simultanées vers HumHub pour une page de fil.
- */
+
 async function mapLimit(items, limit, worker) {
   const results = new Array(items.length);
   let cursor = 0;
