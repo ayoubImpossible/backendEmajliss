@@ -58,6 +58,20 @@ function firstImage(html) {
   return m ? absolute(m[1]) : null;
 }
 
+/**
+ * Si HumHub renvoie la page web complète (menus, en-tête…), ne garder que le
+ * document de la revue : le bloc « document-container » / « imported-document-content ».
+ */
+function documentOnly(html) {
+  const s = String(html || '');
+  const start = s.search(/<div[^>]+class=["'][^"']*(document-container|imported-document-content)/i);
+  if (start < 0) return s;
+  let out = s.slice(start);
+  const end = out.search(/<\/body>|<footer[\s>]/i);
+  if (end > 0) out = out.slice(0, end);
+  return out;
+}
+
 /** Rend les adresses relatives de HumHub absolues dans le HTML. */
 function absolutizeHtml(html) {
   return String(html || '').replace(/(\s(?:src|href)=["'])(\/(?!\/)[^"']*)(["'])/gi, (m, a, p, b) => `${a}${BASE}${p}${b}`);
@@ -99,7 +113,7 @@ async function get(token, id) {
 
   // La route peut aussi renvoyer directement la page HTML.
   if (typeof data === 'string') {
-    const body = cleanHtml(absolutizeHtml(data));
+    const body = cleanHtml(absolutizeHtml(documentOnly(data)));
     const title = plain((data.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '') || 'Revue de presse';
     return { id: String(id), title, date: null, imageUrl: firstImage(body), html: body };
   }
@@ -107,7 +121,7 @@ async function get(token, id) {
   const x = unwrap(data);
   const summary = mapSummary({ id, ...x }) || { id: String(id), title: 'Revue de presse' };
   const html = pick(x, ['html', 'content_html', 'contentHtml', 'content', 'body', 'message']) || longestHtml(x);
-  const body = cleanHtml(absolutizeHtml(typeof html === 'string' ? html : ''));
+  const body = cleanHtml(absolutizeHtml(documentOnly(typeof html === 'string' ? html : '')));
   return { ...summary, html: body, imageUrl: summary.imageUrl || firstImage(body) };
 }
 
