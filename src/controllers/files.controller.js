@@ -28,11 +28,11 @@ exports.createTicket = async (req, res, next) => {
   if (!/^\d+$/.test(id)) return res.status(400).json({ error: 'Identifiant de fichier invalide.' });
 
   try {
-    let info = await files.fileInfo(source, id, req.humhubToken);
-    if (!info && source === 'drive') return res.status(404).json({ error: 'Fichier introuvable ou accès refusé.' });
-    // cfiles : l'API de métadonnées n'est pas toujours exposée ; le
-    // téléchargement, lui, vérifie l'accès.
-    info = info || { filename: String(req.body?.filename || ''), mimeType: String(req.body?.mimeType || ''), size: null };
+    const info = await files.fileInfo(source, id, req.humhubToken);
+    if (!info) return res.status(404).json({ error: 'Fichier introuvable ou accès refusé.' });
+    // Nom absent de l'en-tête : celui que connaît l'application.
+    info.filename = info.filename || String(req.body?.filename || '').slice(0, 255);
+    info.mimeType = info.mimeType || String(req.body?.mimeType || '').slice(0, 120);
 
     const kind = files.viewKind(info.filename, info.mimeType);
     const ticket = tickets.issue({

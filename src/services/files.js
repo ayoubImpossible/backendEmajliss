@@ -39,10 +39,10 @@ function viewKind(filename, mime = '') {
 function downloadPaths(source, id) {
   const sid = encodeURIComponent(String(id));
   if (source === 'cfile') {
-    return [
-      `/emajlis/cfiles/file/${sid}/download`,
-      `/file/download?id=${sid}`,
-    ];
+    // Pièces jointes et module Fichiers : route REST du cœur HumHub, l'identifiant
+    // est celui de l'enregistrement File (vérifié : /file/download?id= et
+    // /emajlis/cfiles/… n'existent pas sur ce serveur).
+    return [`/file/download/${sid}`];
   }
   return [`/emajlis/drive/file/${sid}/download`];
 }
@@ -56,7 +56,7 @@ async function fetchUpstream(source, id, token, { inline = true, responseType = 
   for (const p of downloadPaths(source, id)) {
     try {
       const sep = p.includes('?') ? '&' : '?';
-      return await http.get(inline ? `${p}${sep}inline=1` : p, {
+      const res = await http.get(inline ? `${p}${sep}inline=1` : p, {
         ...asUser(token),
         headers: { ...asUser(token).headers, ...(range ? { Range: range } : {}) },
         responseType,
@@ -64,6 +64,15 @@ async function fetchUpstream(source, id, token, { inline = true, responseType = 
         maxContentLength: 200 * 1024 * 1024,
         validateStatus: (s) => s === 200 || s === 206,
       });
+      // Une page HTML ou une erreur JSON n'est pas le fichier demandé.
+      const ct = String(res.headers['content-type'] || '');
+      if (/^(text\/html|application\/json)/i.test(ct) && !/\.(html?|json)\b/i.test(String(res.headers['content-disposition'] || ''))) {
+        if (res.data?.destroy) res.data.destroy();
+        const e = new Error(`réponse ${ct} au lieu du fichier`);
+        e.response = { status: 404 };
+        throw e;
+      }
+      return res;
     } catch (err) {
       lastErr = err;
       const s = err.response?.status;
@@ -77,12 +86,15 @@ async function fetchUpstream(source, id, token, { inline = true, responseType = 
 async function fileInfo(source, id, token) {
   try {
     if (source === 'cfile') {
-      const { data } = await http.get(`/cfiles/file/${encodeURIComponent(id)}`, { ...asUser(token), timeout: 8000 });
-      const f = data?.file || data || {};
+      // Pas d'API de métadonnées par identifiant de File : on lit l'en-tête du
+      // téléchargement (1 octet), qui prouve aussi l'accès.
+      const r = await fetchUpstream('cfile', id, token, { responseType: 'stream', range: 'bytes=0-0', timeout: 15000 });
+      r.data.destroy();
+      const total = String(r.headers['content-range'] || '').split('/')[1];
       return {
-        filename: f.file_name || f.name || f.title || '',
-        mimeType: f.mime_type || '',
-        size: Number(f.size) || null,
+        filename: filenameFromDisposition(r.headers['content-disposition']),
+        mimeType: String(r.headers['content-type'] || '').split(';')[0],
+        size: Number(total || r.headers['content-length']) || null,
       };
     }
     const { data } = await http.get(`/emajlis/drive/file/${encodeURIComponent(id)}`, { ...asUser(token), timeout: 8000 });
