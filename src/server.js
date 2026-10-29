@@ -103,6 +103,7 @@ const { comments: commentRoutes, likes: likeRoutes } = require('./routes/social.
 app.use('/api/comments', commentRoutes);
 app.use('/api/likes', likeRoutes);
 app.use('/api/eservices', require('./routes/eservices.routes'));
+app.use('/api/revue-presse', require('./routes/revuePresse.routes'));
 app.use('/api/membres', require('./routes/membres.routes'));
 app.use('/api/calendar', require('./routes/calendar.routes'));
 

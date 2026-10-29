@@ -42,6 +42,7 @@ const inflightEnrich = new Map();
 
 // ── WordPress : articles du Journal et revues de presse ─────────────────────
 const wordpress = require('./wordpress');
+const { revuePresseIdFrom } = require('./revuePresse');
 
 /** Aperçu de carte pour un article : titre HumHub d'abord, WordPress pour l'image et le chapeau. */
 async function articlePreview(raw) {
@@ -169,7 +170,7 @@ async function fetchPreview(type, objectId, token) {
         excerpt:     toPlainText(raw),
         imageUrl:    imageFromText(raw) || imageFromFiles(p.files),
         externalUrl: linkFromText(raw),
-        extra: {},
+        extra: revuePresseIdFrom(raw) ? { isRevueDePresse: true, revuePresseId: revuePresseIdFrom(raw) } : {},
       };
     }
 
@@ -511,6 +512,7 @@ function prewarmThumbnails(items, token) {
 
 module.exports = {
   enrichItems,
+  revuePresseIdFrom,
   normalizeType,
   toPlainText,
   titleFromText,

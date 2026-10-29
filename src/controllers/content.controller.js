@@ -4,6 +4,7 @@ const { http, asUser, tryGet } = require('../services/humhub');
 const { normalizeType, toPlainText, titleFromText, imageFromText } = require('../services/enrich');
 
 const wordpress = require('../services/wordpress');
+const revuePresse = require('../services/revuePresse');
 
 /**
  * Article WordPress complet (Journal ou revue de presse) au format de détail.
@@ -35,10 +36,24 @@ async function loadBody(type, objectId, token, createdAt, titleHint = '') {
       const majlissMatch = message.match(/https?:\/\/[^\s)]+\/external-html-stream\/majliss-post\/view\?id=(\d+)/i)
         || message.match(/https?:\/\/[^\s)]+\/revue-presse[^\s)]*\?id=(\d+)/i);
 
+      // Billet qui cite une revue de presse : son HTML complet vient de HumHub.
+      const revueId = revuePresse.revuePresseIdFrom(message) || (majlissMatch && majlissMatch[1]);
+      if (revueId) {
+        const r = await revuePresse.get(token, revueId).catch(() => null);
+        if (r?.html) {
+          return {
+            title: r.title || titleHint || titleFromText(message),
+            body: r.html,
+            bodyFormat: 'html',
+            imageUrl: r.imageUrl,
+            extra: { isRevueDePresse: true, revuePresseId: String(revueId) },
+          };
+        }
+      }
       if (majlissMatch || /revue\s+de\s+presse/i.test(message)) {
         const title = titleHint || titleFromText(message);
         const art = await loadWordpressArticle({ title, createdAt });
-        if (art) return art;
+        if (art) return { ...art, extra: { ...art.extra, ...(revueId ? { revuePresseId: String(revueId) } : {}) } };
       }
 
       return {
@@ -51,7 +66,20 @@ async function loadBody(type, objectId, token, createdAt, titleHint = '') {
     }
 
     case 'article': {
-      // MajlissPost / ImportArticle : contenu réel tiré de WordPress (articles et pages).
+      // Revue de presse : HTML complet servi par HumHub (/emajlis/revue-presse).
+      if (/revue\s+de\s+presse/i.test(titleHint || '')) {
+        const r = await revuePresse.get(token, objectId).catch(() => null);
+        if (r?.html) {
+          return {
+            title: r.title || titleHint,
+            body: r.html,
+            bodyFormat: 'html',
+            imageUrl: r.imageUrl,
+            extra: { isRevueDePresse: true, revuePresseId: String(objectId) },
+          };
+        }
+      }
+      // Sinon (ou en repli) : article WordPress de l'intranet.
       return loadWordpressArticle({ title: titleHint, createdAt });
     }
 
@@ -206,6 +234,7 @@ exports.show = async (req, res, next) => {
       topics:      data.topics   || [],
       files:       data.files    || [],
       extra:       loaded?.extra || {},
+      revuePresseId: loaded?.extra?.revuePresseId || null,
       needsServerSupport: !loaded,
       metadata:    meta,
     });
