@@ -382,7 +382,9 @@ async function enrichItems(rawItems, token) {
       let preview = previewCache.get(key);
       if (preview === undefined) {
         preview = await articlePreview(raw).catch(() => null);
-        previewCache.set(key, preview ?? TtlCache.NULL_SENTINEL);
+        // Échec (WordPress injoignable ou fermé) : ne pas le mémoriser,
+        // l'article réapparaît dès que la source répond de nouveau.
+        if (preview) previewCache.set(key, preview);
       }
       if (preview && preview !== TtlCache.NULL_SENTINEL) {
         item.title = item.title || preview.title;
