@@ -100,3 +100,44 @@ exports.createFolder = async (req, res, next) => {
   }
 };
 
+
+// ── POST /api/drive/container/:containerId/upload ───────────────────────────
+// Dépôt de fichiers depuis l'application : relais multipart vers la route
+// HumHub existante (emajlisApi DriveController::actionUpload). Les droits
+// (UploadFiles) et les extensions autorisées sont vérifiés par HumHub.
+/** Nom de fichier lu en latin-1 par busboy : on le relit en UTF-8 (accents, arabe). */
+function utf8Name(name) {
+  const fixed = Buffer.from(String(name || 'fichier'), 'latin1').toString('utf8');
+  return fixed.includes('\uFFFD') ? String(name || 'fichier') : fixed;
+}
+
+exports.upload = async (req, res, next) => {
+  const files = req.files || [];
+  if (!files.length) return res.status(400).json({ error: 'Aucun fichier reçu (champ « files »).' });
+
+  const form = new FormData();
+  for (const f of files) {
+    form.append('files[]', new Blob([f.buffer], { type: f.mimetype || 'application/octet-stream' }), utf8Name(f.originalname));
+  }
+  if (req.body?.folderId) form.append('folderId', String(req.body.folderId));
+
+  try {
+    const { data } = await http.post(`/emajlis/drive/container/${encodeURIComponent(req.params.containerId)}/upload`, form, {
+      ...asUser(req.humhubToken),
+      timeout: 300000,
+      maxBodyLength: Infinity,
+    });
+    res.status(201).json(data);
+  } catch (err) {
+    const s = err.response?.status;
+    if (s === 403) return res.status(403).json({ error: "Vous n'avez pas le droit de déposer un fichier dans cet espace." });
+    if (s === 400) {
+      const d = err.response.data || {};
+      const detail = Object.values(d.errors || {}).flat().join(' ');
+      return res.status(400).json({ error: detail || d.message || 'Le dépôt a échoué.' });
+    }
+    if (s === 404) return res.status(404).json({ error: 'Dossier de destination introuvable.' });
+    if (s === 413) return res.status(413).json({ error: 'Fichier trop volumineux.' });
+    next(err);
+  }
+};
