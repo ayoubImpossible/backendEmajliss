@@ -85,8 +85,9 @@ function mapSummary(x) {
   return {
     id: String(id),
     title: plain(pick(x, ['title', 'titre', 'name', 'subject']) || '') || 'Revue de presse',
-    date: pick(x, ['date', 'published_at', 'publishedAt', 'created_at', 'createdAt', 'metadata.created_at']) || null,
-    imageUrl: absolute(pick(x, ['image_url', 'imageUrl', 'image', 'cover', 'cover_url', 'thumbnail', 'thumbnail_url']))
+    // Route de Tarik (RevuePresseController) : publicationDate.
+    date: pick(x, ['publicationDate', 'publication_date', 'date', 'published_at', 'publishedAt', 'createdAt', 'created_at', 'metadata.created_at']) || null,
+    imageUrl: absolute(pick(x, ['imageUrl', 'image_url', 'image', 'cover', 'cover_url', 'thumbnail', 'thumbnail_url']))
       || firstImage(html),
     excerpt: plain(pick(x, ['excerpt', 'summary', 'description', 'chapeau']) || '').slice(0, 220)
       || plain(html).slice(0, 220),

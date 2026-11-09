@@ -166,14 +166,18 @@ exports.getSpace = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+let spaceRouteMissing = false;
+
 exports.getSpaceFeed = async (req, res, next) => {
   const { containerId } = req.params;
   const page = toPage(req.query.page);
   const limit = clampLimit(req.query.limit, 10);
   const token = req.humhubToken;
 
-  // Préférer /emajlis/space/{id} si disponible : plus riche, plus fiable.
-  try {
+  // Préférer /emajlis/space/{id} si le serveur l'expose. Vérifié le
+  // 09/11/2026 : la route n'existe pas sur emajlis-dev. Après un premier 404,
+  // on ne la redemande plus (un aller-retour de moins par fil d'espace).
+  if (!spaceRouteMissing) try {
     const { data } = await http.get(`/emajlis/space/${containerId}`, {
       ...asUser(token),
       params: { page, limit },
@@ -183,6 +187,7 @@ exports.getSpaceFeed = async (req, res, next) => {
     return res.json(paginated(data, results, page));
   } catch (err) {
     if (err.response?.status !== 404) return next(err);
+    spaceRouteMissing = true;
   }
 
   try {
