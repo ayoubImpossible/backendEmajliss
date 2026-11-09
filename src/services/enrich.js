@@ -44,11 +44,29 @@ const inflightEnrich = new Map();
 const wordpress = require('./wordpress');
 const { revuePresseIdFrom } = require('./revuePresse');
 
-/** Aperçu de carte pour un article : titre HumHub d'abord, WordPress pour l'image et le chapeau. */
-async function articlePreview(raw) {
+const articles = require('./articles');
+
+/**
+ * Aperçu de carte pour un article du Journal : d'abord la route HumHub
+ * (/emajlis/article), sinon l'intranet WordPress en repli.
+ */
+async function articlePreview(raw, token) {
+  const type = articles.articleType(raw?.metadata?.object_model);
+  const id = raw?.metadata?.object_id;
+  if (type && id != null) {
+    const a = await articles.get(token, type, id).catch(() => null);
+    if (a) {
+      return {
+        title: a.title,
+        excerpt: a.excerpt,
+        imageUrl: a.imageUrl,
+        externalUrl: null,
+        extra: { articleType: type, isRtl: a.isRtl },
+      };
+    }
+  }
   const hint = { title: raw?.preview?.title || '', createdAt: raw?.metadata?.created_at || null };
-  const entry = await wordpress.findEntry(hint);
-  const art = wordpress.toArticle(entry);
+  const art = wordpress.toArticle(await wordpress.findEntry(hint));
   if (!art) return null;
   return {
     title: hint.title || art.title,
@@ -381,7 +399,7 @@ async function enrichItems(rawItems, token) {
       const key = `article:${item.objectId}`;
       let preview = previewCache.get(key);
       if (preview === undefined) {
-        preview = await articlePreview(raw).catch(() => null);
+        preview = await articlePreview(raw, token).catch(() => null);
         // Échec (WordPress injoignable ou fermé) : ne pas le mémoriser,
         // l'article réapparaît dès que la source répond de nouveau.
         if (preview) previewCache.set(key, preview);

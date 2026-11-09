@@ -24,3 +24,4 @@ data/
 thumbnails/
 
 scripts/probe-revue-output.json
+scripts/probe-articles-output.json

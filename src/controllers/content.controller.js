@@ -5,6 +5,7 @@ const { normalizeType, toPlainText, titleFromText, imageFromText } = require('..
 
 const wordpress = require('../services/wordpress');
 const revuePresse = require('../services/revuePresse');
+const articles = require('../services/articles');
 
 /**
  * Article WordPress complet (Journal ou revue de presse) au format de détail.
@@ -23,7 +24,7 @@ async function loadWordpressArticle(hint) {
 }
 
 /** Charge le modèle spécialisé et en extrait le corps complet. */
-async function loadBody(type, objectId, token, createdAt, titleHint = '') {
+async function loadBody(type, objectId, token, createdAt, titleHint = '', objectModel = '') {
   switch (type) {
 
     case 'post': {
@@ -66,20 +67,21 @@ async function loadBody(type, objectId, token, createdAt, titleHint = '') {
     }
 
     case 'article': {
-      // Revue de presse : HTML complet servi par HumHub (/emajlis/revue-presse).
-      if (/revue\s+de\s+presse/i.test(titleHint || '')) {
-        const r = await revuePresse.get(token, objectId).catch(() => null);
-        if (r?.html) {
+      // Article du Journal : texte complet servi par HumHub (/emajlis/article).
+      const kind = articles.articleType(objectModel);
+      if (kind) {
+        const art = await articles.get(token, kind, objectId).catch(() => null);
+        if (art?.html) {
           return {
-            title: r.title || titleHint,
-            body: r.html,
+            title: art.title || titleHint,
+            body: art.html,
             bodyFormat: 'html',
-            imageUrl: r.imageUrl,
-            extra: { isRevueDePresse: true, revuePresseId: String(objectId) },
+            imageUrl: art.imageUrl,
+            extra: { articleType: kind, isRtl: art.isRtl, originalLink: art.originalLink },
           };
         }
       }
-      // Sinon (ou en repli) : article WordPress de l'intranet.
+      // Repli : intranet WordPress (s'il est accessible).
       return loadWordpressArticle({ title: titleHint, createdAt });
     }
 
@@ -209,7 +211,7 @@ exports.show = async (req, res, next) => {
     // Le titre du fil (preview.title) sert à retrouver l'article WordPress exact.
     const titleHint = String(data.preview?.title || req.query.title || '').slice(0, 300);
 
-    const loaded = await loadBody(type, meta.object_id, token, createdAt, titleHint);
+    const loaded = await loadBody(type, meta.object_id, token, createdAt, titleHint, meta.object_model || '');
 
     res.setHeader('Cache-Control', 'no-store');
     res.json({
